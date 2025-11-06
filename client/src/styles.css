@@ -1,0 +1,285 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-2xl px-4 py-2 bg-brand hover:bg-brand-dark text-black font-semibold text-sm sm:text-base shadow-soft transition;
+}
+.card {
+  @apply rounded-2xl p-4 md:p-5;
+}
+.input {
+  @apply w-full bg-black/25 border border-white/10 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-brand;
+}
+.label {
+  @apply text-sm text-white/70 mb-1;
+}
+.link {
+  @apply text-brand hover:underline;
+}
+
+.trade-btn {
+  @apply inline-flex items-center justify-center rounded-2xl px-4 py-2.5 text-sm font-semibold transition shadow-soft border border-transparent;
+}
+.trade-btn:disabled {
+  @apply opacity-70 cursor-not-allowed;
+}
+.trade-btn-buy {
+  @apply bg-emerald-400 text-black hover:bg-emerald-300;
+}
+.trade-btn-sell {
+  @apply bg-rose-500 text-white hover:bg-rose-400;
+}
+
+.theme-light body,
+body.theme-light {
+  background-color: #f7f8fb;
+  color: #111827;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+body.theme-dark {
+  background-color: #0b0f13;
+  color: #f1f5f9;
+  color-scheme: dark;
+}
+
+body.theme-light {
+  color-scheme: light;
+}
+
+body.theme-light .card {
+  background: linear-gradient(135deg, #ffffff, #f5f7ff) !important;
+  color: #0f172a !important;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.1) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+}
+
+body.theme-light header {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+  backdrop-filter: blur(16px);
+}
+
+body.theme-light .btn {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+body.theme-light .btn.bg-white {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+}
+
+body.theme-light [class*="bg-[#0b0f13]"] {
+  background-color: rgba(255, 255, 255, 0.97) !important;
+  color: #0f172a !important;
+}
+
+body.theme-light [class*="bg-black\\/30"] {
+  background-color: rgba(226, 232, 240, 0.7) !important;
+  color: #0f172a !important;
+}
+body.theme-light [class*="bg-black\\/25"],
+body.theme-light [class*="bg-black\\/20"],
+body.theme-light [class*="bg-black\\/15"] {
+  background-color: rgba(241, 245, 249, 0.85) !important;
+  color: #0f172a !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+body.theme-light [class*="bg-white\\/5"],
+body.theme-light [class*="bg-white\\/10"] {
+  background-color: rgba(226, 232, 240, 0.72) !important;
+  color: #0f172a !important;
+}
+
+body.theme-light [class*="border-white\\/5"] {
+  border-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+body.theme-light .input {
+  background-color: rgba(226, 232, 240, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.4) !important;
+  color: #0f172a !important;
+}
+
+body.theme-light .notification-panel {
+  background-color: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(148, 163, 184, 0.3) !important;
+  box-shadow: 0 20px 32px rgba(15, 23, 42, 0.14) !important;
+}
+
+body.theme-light .notification-content {
+  color: #0f172a !important;
+}
+
+body.theme-light .notification-message {
+  color: rgba(30, 41, 59, 0.72) !important;
+}
+
+body.theme-light .text-white\/70 {
+  color: rgba(55, 65, 81, 0.72) !important;
+}
+
+body.theme-light .text-white\/75 {
+  color: rgba(30, 41, 59, 0.82) !important;
+}
+
+body.theme-light .text-white\/65 {
+  color: rgba(55, 65, 81, 0.7) !important;
+}
+
+body.theme-light .text-white\/60 {
+  color: rgba(71, 85, 105, 0.7) !important;
+}
+
+body.theme-light .text-white\/50 {
+  color: rgba(100, 116, 139, 0.75) !important;
+}
+
+body.theme-light .text-white\/55 {
+  color: rgba(71, 85, 105, 0.68) !important;
+}
+
+body.theme-light .text-white\/45 {
+  color: rgba(100, 116, 139, 0.65) !important;
+}
+
+body.theme-light .text-white\/35 {
+  color: rgba(148, 163, 184, 0.6) !important;
+}
+
+body.theme-light .text-white\/80 {
+  color: rgba(30, 41, 59, 0.85) !important;
+}
+
+/* Notification panel responsive fixes */
+.notification-content {
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  max-width: 100%;
+  white-space: normal;
+}
+
+/* Additional light theme refinements */
+.theme-light main {
+  background: transparent;
+}
+
+.theme-light header a,
+.theme-light header button {
+  color: #0f172a !important;
+}
+
+.theme-light header button {
+  background-color: rgba(226, 232, 240, 0.6) !important;
+}
+
+.theme-light header button:hover {
+  background-color: rgba(203, 213, 225, 0.8) !important;
+}
+
+body.theme-light .balance-chip {
+  background-color: rgba(241, 245, 249, 0.85) !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #0f172a !important;
+}
+
+body.theme-light .nav-icon {
+  background-color: rgba(241, 245, 249, 0.85) !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #0f172a !important;
+}
+
+body.theme-light .nav-icon svg {
+  color: inherit !important;
+}
+
+body.theme-light .notification-panel {
+  background-color: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 20px 32px rgba(15, 23, 42, 0.14) !important;
+  border-color: rgba(148, 163, 184, 0.3) !important;
+}
+
+body.theme-light .notification-content {
+  color: #0f172a !important;
+}
+
+body.theme-light .notification-message {
+  color: rgba(30, 41, 59, 0.72) !important;
+}
+
+body.theme-light .text-white\/60 {
+  color: rgba(71, 85, 105, 0.7) !important;
+}
+
+body.theme-light .text-white\/50 {
+  color: rgba(100, 116, 139, 0.75) !important;
+}
+
+body.theme-light .text-white\/80 {
+  color: rgba(30, 41, 59, 0.85) !important;
+}
+
+body.theme-light .trade-btn-buy {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
+
+body.theme-light .trade-btn-buy:hover {
+  background-color: #3b82f6 !important;
+}
+
+body.theme-light .trade-btn-sell {
+  background-color: #f43f5e !important;
+  color: #ffffff !important;
+}
+
+body.theme-light .trade-btn-sell:hover {
+  background-color: #fb7185 !important;
+}
+
+body.theme-light .card h1,
+body.theme-light .card h2,
+body.theme-light .card h3,
+body.theme-light .card h4,
+body.theme-light .card h5,
+body.theme-light .card h6 {
+  color: #0f172a !important;
+}
+
+body.theme-light .card .text-white {
+  color: #0f172a !important;
+}
+
+body.theme-light .card .text-white\/70 {
+  color: rgba(71, 85, 105, 0.75) !important;
+}
+
+body.theme-light .card .text-white\/60 {
+  color: rgba(71, 85, 105, 0.7) !important;
+}
+
+body.theme-light .label {
+  color: rgba(71, 85, 105, 0.75) !important;
+}
+
+.notification-message {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.nav-icon {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.balance-chip {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
