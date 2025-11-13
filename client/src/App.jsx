@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Routes, Route, Link, useNavigate } from 'react-router-dom'
+import { Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom'
 import { useAuth } from './store'
+import { useAdminAuth } from './adminStore'
 import { api } from './api'
 import { useAccount } from './accountStore'
 import { useNotificationsStore } from './notificationsStore'
@@ -10,8 +11,13 @@ import Signup from './pages/Signup'
 import UserDashboard from './pages/UserDashboard'
 import Profile from './pages/Profile'
 import History from './pages/History'
-import AdminDashboard from './pages/AdminDashboard'
 import ResetPassword from './pages/ResetPassword'
+import AdminLogin from './pages/AdminLogin'
+import AdminLayout from './pages/admin/AdminLayout'
+import AdminDashboard from './pages/AdminDashboard'
+import AdminUsersPage from './pages/admin/AdminUsersPage'
+import AdminNotificationsPage from './pages/admin/AdminNotificationsPage'
+import AdminRolesPage from './pages/admin/AdminRolesPage'
 
 const navCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -175,9 +181,6 @@ function Shell({ children }) {
     menuItems.push({ label: 'Trade', path: '/dashboard' })
     menuItems.push({ label: 'History', path: '/history' })
     menuItems.push({ label: 'Profile', path: '/profile' })
-    if (user.role === 'admin') {
-      menuItems.push({ label: 'Admin', path: '/admin' })
-    }
   }
 
   return (
@@ -348,6 +351,7 @@ export default function App() {
             <div className="flex gap-3">
               <Link to="/signup" className="btn">Get started</Link>
               <Link to="/login" className="btn bg-white text-black">Sign in</Link>
+              <Link to="/admin/login" className="btn bg-indigo-500 text-white">Admin Console</Link>
             </div>
           </div>
           <div className="card">
@@ -364,9 +368,23 @@ export default function App() {
       <Route path="/dashboard" element={<Shell><UserDashboard /></Shell>} />
       <Route path="/profile" element={<Shell><Profile /></Shell>} />
       <Route path="/history" element={<Shell><History /></Shell>} />
-      <Route path="/admin" element={<Shell><AdminDashboard /></Shell>} />
+      <Route path="/admin/login" element={<AdminLogin />} />
+      <Route path="/admin" element={<AdminProtectedRoute><AdminLayout /></AdminProtectedRoute>}>
+        <Route index element={<AdminDashboard />} />
+        <Route path="users" element={<AdminUsersPage />} />
+        <Route path="notifications" element={<AdminNotificationsPage />} />
+        <Route path="roles" element={<AdminRolesPage />} />
+      </Route>
     </Routes>
   )
+}
+
+function AdminProtectedRoute({ children }) {
+  const { token } = useAdminAuth()
+  if (!token) {
+    return <Navigate to="/admin/login" replace />
+  }
+  return children
 }
 function EyeOpenIcon({ className }) {
   return (

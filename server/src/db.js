@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS candles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_candles_symbol_ts ON candles(symbol, ts);
+DELETE FROM candles
+WHERE rowid NOT IN (
+  SELECT MIN(rowid)
+  FROM candles
+  GROUP BY symbol, ts
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_candles_symbol_ts ON candles(symbol, ts);
 
 CREATE TABLE IF NOT EXISTS ticks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +104,14 @@ CREATE TABLE IF NOT EXISTS ticks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ticks_symbol_ts ON ticks(symbol, ts);
+
+CREATE TABLE IF NOT EXISTS admin_permissions (
+  user_id INTEGER PRIMARY KEY,
+  permissions TEXT NOT NULL DEFAULT '[]',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS spot_markets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +209,40 @@ ensureColumn('trades', 'pip_value', 'pip_value REAL DEFAULT 0');
 ensureColumn('trades', 'pips_realized', 'pips_realized REAL DEFAULT 0');
 ensureColumn('trades', 'stake_amount', 'stake_amount REAL DEFAULT 0');
 ensureColumn('market_settings', 'pip_size', 'pip_size REAL DEFAULT 0.0001');
+ensureColumn('market_settings', 'speed_multiplier', 'speed_multiplier REAL DEFAULT 1');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS market_channels (
+  channel TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  base_price REAL DEFAULT 0,
+  volatility REAL DEFAULT 0.01,
+  speed REAL DEFAULT 1,
+  status TEXT DEFAULT 'live',
+  description TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
+const defaultChannels = [
+  { channel: 'OTC', label: 'OTC Desk', base_price: 60000, volatility: 0.02, speed: 1, status: 'live', description: 'Primary OTC desk' },
+  { channel: 'BINARY', label: 'Binary Options', base_price: 1.25, volatility: 0.05, speed: 1.2, status: 'live', description: 'Short-term binary ladder' },
+  { channel: 'SPOT', label: 'Spot Market', base_price: 2700, volatility: 0.03, speed: 1, status: 'live', description: 'Spot liquidity pool' },
+  { channel: 'FUTURE', label: 'Futures', base_price: 35000, volatility: 0.04, speed: 0.9, status: 'maintenance', description: 'Perpetual futures board' },
+  { channel: 'ALPHA', label: 'Alpha Strategy', base_price: 1200, volatility: 0.06, speed: 1.4, status: 'live', description: 'Experimental alpha stream' }
+];
+
+const upsertChannelStmt = db.prepare(`
+  INSERT INTO market_channels (channel, label, base_price, volatility, speed, status, description)
+  VALUES (@channel, @label, @base_price, @volatility, @speed, @status, @description)
+  ON CONFLICT(channel) DO UPDATE SET
+    label = excluded.label,
+    description = COALESCE(market_channels.description, excluded.description)
+`);
+
+for (const ch of defaultChannels) {
+  upsertChannelStmt.run(ch);
+}
 
 // Backfill legacy rows so new logic has sane defaults
 db.prepare(`

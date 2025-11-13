@@ -2,6 +2,16 @@
 import db from '../db.js';
 import { nowTs } from '../utils.js';
 
+const insertCandleStmt = db.prepare(`
+  INSERT INTO candles (symbol, open, high, low, close, volume, ts)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(symbol, ts) DO UPDATE SET
+    high = CASE WHEN excluded.high > candles.high THEN excluded.high ELSE candles.high END,
+    low = CASE WHEN excluded.low < candles.low THEN excluded.low ELSE candles.low END,
+    close = excluded.close,
+    volume = candles.volume + excluded.volume
+`);
+
 let ioRef = null;
 let lastPrice = null;
 let lastCandle = null; // { open, high, low, close, volume, tsStart }
@@ -48,7 +58,8 @@ export function tickOnce() {
   if (s.paused) return;
 
   // geometric random walk
-  const sigma = s.volatility; // e.g. 0.02 -> ~2%/sqrt(s)
+  const speedMultiplier = Number(s.speed_multiplier || 1);
+  const sigma = s.volatility * speedMultiplier; // scale volatility by speed
   const noise = (Math.random() - 0.5) * 2; // [-1, 1]
   const drift = 0; // flat drift
   const p0 = currentPrice();
@@ -62,8 +73,15 @@ export function tickOnce() {
   if (!lastCandle || now - lastCandle.tsStart >= 60) {
     // close previous candle
     if (lastCandle) {
-      db.prepare(`INSERT INTO candles (symbol, open, high, low, close, volume, ts) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(s.symbol, lastCandle.open, lastCandle.high, lastCandle.low, lastCandle.close, lastCandle.volume, lastCandle.tsStart);
+      insertCandleStmt.run(
+        s.symbol,
+        lastCandle.open,
+        lastCandle.high,
+        lastCandle.low,
+        lastCandle.close,
+        lastCandle.volume,
+        lastCandle.tsStart
+      );
     }
     lastCandle = { open: p1, high: p1, low: p1, close: p1, volume: Math.random() * 2, tsStart: now - (now % 60) };
   } else {

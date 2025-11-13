@@ -12,17 +12,27 @@ const defaultBase = (() => {
 
 const API_BASE = import.meta.env.VITE_API_BASE || defaultBase
 const MAX_CANDLES = 500
-const TIMEFRAMES = ['15s', '30s', '1m', '5m', '10m']
+const DEFAULT_TIMEFRAMES = ['15s', '30s', '1m', '5m', '10m', '15m', '1h', '1d']
 
 function tfToSeconds(tf) {
-  const match = String(tf).match(/^(\d+)(s|m)$/)
+  const match = String(tf).match(/^(\d+)([smhdwy])$/i)
   if (!match) return 60
   const value = Number(match[1])
   if (!Number.isFinite(value) || value <= 0) return 60
-  return match[2] === 'm' ? value * 60 : value
+  const unit = match[2].toLowerCase()
+  const MULTIPLIERS = { s: 1, m: 60, h: 3600, d: 86400, w: 604800, y: 31536000 }
+  return value * (MULTIPLIERS[unit] ?? 60)
 }
 
-export default function CandlestickChart({ symbol = 'BTCUSDT', trades = [], onPriceUpdate, timeframe = '1m', onTimeframeChange, summary = [] }) {
+export default function CandlestickChart({
+  symbol = 'BTCUSDT',
+  trades = [],
+  onPriceUpdate,
+  timeframe = '1m',
+  onTimeframeChange,
+  summary = [],
+  timeframes = DEFAULT_TIMEFRAMES
+}) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
@@ -200,7 +210,7 @@ export default function CandlestickChart({ symbol = 'BTCUSDT', trades = [], onPr
           onChange={(e) => onTimeframeChange?.(e.target.value)}
           className="rounded-xl border border-emerald-400/70 bg-emerald-50/30 px-3 py-1.5 text-[11px] font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand"
         >
-          {TIMEFRAMES.map(tf => (
+          {timeframes.map(tf => (
             <option key={tf} value={tf} className="text-slate-900">{tf.toUpperCase()}</option>
           ))}
         </select>

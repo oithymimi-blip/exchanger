@@ -1,5 +1,5 @@
 import express from 'express';
-import { requireAuth, requireAdmin } from '../auth/authMiddleware.js';
+import { requireAuth, requireAdminRole } from '../auth/authMiddleware.js';
 import { getSpotMarkets, updateSpotOverride } from './service.js';
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.get('/markets', async (req, res) => {
   }
 });
 
-router.post('/markets/:symbol/price', requireAuth, requireAdmin, async (req, res) => {
+router.post('/markets/:symbol/price', requireAuth, requireAdminRole('market'), async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
     const overrides = await updateSpotOverride(symbol, {

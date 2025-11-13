@@ -14,6 +14,10 @@ const insertTradeStmt = db.prepare(`
   INSERT INTO trades (user_id, symbol, side, qty, price, status, remaining_qty, pnl, exit_price, notional, pip_value, pips_realized, stake_amount)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
+const insertActivityLogStmt = db.prepare(`
+  INSERT INTO activity_logs (user_id, actor_role, action, meta)
+  VALUES (?, ?, ?, ?)
+`);
 const updateTradeCloseStmt = db.prepare(`
   UPDATE trades
   SET status = 'closed',
@@ -154,6 +158,18 @@ router.post('/', requireAuth, (req, res) => {
     );
 
     updateBalanceStmt.run(round2(balance.available - usdAmount), round2(balance.locked + usdAmount), req.user.id);
+    insertActivityLogStmt.run(
+      req.user.id,
+      'user',
+      'open_trade',
+      JSON.stringify({
+        symbol,
+        side: normalizedSide,
+        price,
+        amount: usdAmount,
+        qty
+      })
+    );
 
     const overview = computeOverview(req.user.id, 10, price);
     res.json({ ok: true, price, amount: usdAmount, ...overview });
@@ -192,6 +208,21 @@ router.post('/:id/close', requireAuth, (req, res) => {
       round2(Math.max(0, balance.locked - stake)),
       req.user.id
     );
+    insertActivityLogStmt.run(
+      req.user.id,
+      'user',
+      'close_trade',
+      JSON.stringify({
+        tradeId,
+        symbol: trade.symbol,
+        side: trade.side,
+        qty: trade.qty,
+        entryPrice: trade.price,
+        exitPrice: price,
+        pnl,
+        pips
+      })
+    );
 
     const overview = computeOverview(req.user.id, 10, price);
     res.json({ ok: true, realizedPnl: pnl, realizedPips: pips, price, ...overview });
@@ -223,6 +254,17 @@ router.post('/close-all', requireAuth, (req, res) => {
       );
     }
     const overview = computeOverview(req.user.id, 10, price);
+    insertActivityLogStmt.run(
+      req.user.id,
+      'user',
+      'close_all_trades',
+      JSON.stringify({
+        count: openTrades.length,
+        price,
+        realizedPnl: totalPnl,
+        realizedPips: totalPips
+      })
+    );
     res.json({ ok: true, realizedPnl: totalPnl, realizedPips: totalPips, price, ...overview });
   } catch (err) {
     console.error('close-all error', err);

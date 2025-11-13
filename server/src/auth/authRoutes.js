@@ -8,6 +8,12 @@ import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
 
+const upsertAdminPermissionsStmt = db.prepare(`
+  INSERT INTO admin_permissions (user_id, permissions)
+  VALUES (?, json(?))
+  ON CONFLICT(user_id) DO UPDATE SET permissions = json(?), updated_at = CURRENT_TIMESTAMP
+`);
+
 // Bootstrap admin if not exists
 function ensureAdmin() {
   const stmt = db.prepare('SELECT id FROM users WHERE email = ?');
@@ -22,7 +28,10 @@ function ensureAdmin() {
     insert.run(ADMIN_EMAIL, hash, code);
     const admin = db.prepare('SELECT id FROM users WHERE email = ?').get(ADMIN_EMAIL);
     db.prepare('INSERT OR IGNORE INTO balances (user_id, available, locked) VALUES (?, ?, 0)').run(admin.id, INITIAL_BALANCE);
+    upsertAdminPermissionsStmt.run(admin.id, JSON.stringify(['all']), JSON.stringify(['all']));
     console.log('[BOOT] Admin user created:', ADMIN_EMAIL);
+  } else {
+    upsertAdminPermissionsStmt.run(existing.id, JSON.stringify(['all']), JSON.stringify(['all']));
   }
 }
 ensureAdmin();
@@ -66,6 +75,37 @@ router.post('/login', (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
   const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, user: { id: user.id, email: user.email, name: user.name, handle: user.handle, role: user.role, referral_code: user.referral_code } });
+});
+
+router.post('/admin/login', (req, res) => {
+  const { email, password } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (!user || !['admin', 'subadmin'].includes(user.role)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  const ok = bcrypt.compareSync(password, user.password_hash);
+  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+  const permissionsRow = db.prepare('SELECT permissions FROM admin_permissions WHERE user_id = ?').get(user.id);
+  const permissions = (() => {
+    if (!permissionsRow) return user.role === 'admin' ? ['all'] : [];
+    try {
+      const parsed = JSON.parse(permissionsRow.permissions || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  })();
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      permissions
+    }
+  });
 });
 
 router.post('/request-password-reset', (req, res) => {
