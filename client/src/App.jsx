@@ -18,6 +18,7 @@ import AdminDashboard from './pages/AdminDashboard'
 import AdminUsersPage from './pages/admin/AdminUsersPage'
 import AdminNotificationsPage from './pages/admin/AdminNotificationsPage'
 import AdminRolesPage from './pages/admin/AdminRolesPage'
+import AdminMarketControlPage from './pages/admin/MarketControlPage'
 
 const navCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -371,6 +372,7 @@ export default function App() {
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminProtectedRoute><AdminLayout /></AdminProtectedRoute>}>
         <Route index element={<AdminDashboard />} />
+        <Route path="market-control" element={<AdminMarketControlPage />} />
         <Route path="users" element={<AdminUsersPage />} />
         <Route path="notifications" element={<AdminNotificationsPage />} />
         <Route path="roles" element={<AdminRolesPage />} />
