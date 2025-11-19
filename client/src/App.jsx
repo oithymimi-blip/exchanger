@@ -16,6 +16,7 @@ import AdminLogin from './pages/AdminLogin'
 import AdminLayout from './pages/admin/AdminLayout'
 import AdminDashboard from './pages/AdminDashboard'
 import AdminUsersPage from './pages/admin/AdminUsersPage'
+import AdminVerificationsPage from './pages/admin/AdminVerificationsPage'
 import AdminNotificationsPage from './pages/admin/AdminNotificationsPage'
 import AdminRolesPage from './pages/admin/AdminRolesPage'
 import AdminMarketControlPage from './pages/admin/MarketControlPage'
@@ -374,6 +375,7 @@ export default function App() {
         <Route index element={<AdminDashboard />} />
         <Route path="market-control" element={<AdminMarketControlPage />} />
         <Route path="users" element={<AdminUsersPage />} />
+        <Route path="verifications" element={<AdminVerificationsPage />} />
         <Route path="notifications" element={<AdminNotificationsPage />} />
         <Route path="roles" element={<AdminRolesPage />} />
       </Route>

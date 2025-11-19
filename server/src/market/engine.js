@@ -11,6 +11,56 @@ const insertCandleStmt = db.prepare(`
     close = excluded.close,
     volume = candles.volume + excluded.volume
 `);
+const HISTORY_CANDLES = 240;
+
+function seedCandleHistory(symbol, basePrice) {
+  const now = nowTs();
+  const countRow = db.prepare('SELECT COUNT(*) AS cnt FROM candles WHERE symbol = ?').get(symbol);
+  const existing = Number(countRow?.cnt ?? 0);
+  if (existing >= HISTORY_CANDLES) return;
+  let price = typeof basePrice === 'number' && basePrice > 0 ? basePrice : 60000;
+  for (let i = HISTORY_CANDLES; i > 0; i -= 1) {
+    const ts = now - i * 60;
+    const variation = (Math.random() - 0.5) * 0.002;
+    const open = price;
+    const close = price * (1 + variation);
+    const high = Math.max(open, close) * (1 + Math.random() * 0.0008);
+    const low = Math.min(open, close) * (1 - Math.random() * 0.0008);
+    const volume = Math.random() * 3;
+    insertCandleStmt.run(symbol, open, high, low, close, volume, ts);
+    price = close;
+  }
+}
+
+function loadHistoricState(symbol) {
+  const tickRow = db.prepare('SELECT price, ts FROM ticks WHERE symbol = ? ORDER BY ts DESC LIMIT 1').get(symbol);
+  if (tickRow) {
+    lastPrice = tickRow.price;
+    lastCandle = {
+      open: tickRow.price,
+      high: tickRow.price,
+      low: tickRow.price,
+      close: tickRow.price,
+      volume: 0,
+      tsStart: Math.floor(tickRow.ts / 60) * 60
+    };
+    return;
+  }
+  const candleRow = db.prepare('SELECT open, high, low, close, volume, ts FROM candles WHERE symbol = ? ORDER BY ts DESC LIMIT 1').get(symbol);
+  if (candleRow) {
+    lastPrice = candleRow.close;
+    lastCandle = {
+      open: candleRow.open,
+      high: candleRow.high,
+      low: candleRow.low,
+      close: candleRow.close,
+      volume: candleRow.volume,
+      tsStart: candleRow.ts
+    };
+    return;
+  }
+  lastPrice = null;
+}
 
 let ioRef = null;
 let lastPrice = null;
@@ -53,9 +103,34 @@ export function resetEngine(newBasePrice = null) {
   lastCandle = null;
 }
 
+let historySeeded = false;
+
 export function tickOnce() {
   const s = getSettings();
   if (s.paused) return;
+
+  if (!historySeeded) {
+    seedCandleHistory(s.symbol, s.base_price);
+    historySeeded = true;
+  }
+
+  if (lastPrice == null) {
+    loadHistoricState(s.symbol);
+  }
+
+  if (!lastCandle) {
+    const recent = db.prepare('SELECT open, high, low, close, volume, ts FROM candles WHERE symbol = ? ORDER BY ts DESC LIMIT 1').get(s.symbol);
+    if (recent) {
+      lastCandle = {
+        open: recent.open,
+        high: recent.high,
+        low: recent.low,
+        close: recent.close,
+        volume: recent.volume,
+        tsStart: recent.ts
+      };
+    }
+  }
 
   // geometric random walk
   const speedMultiplier = Number(s.speed_multiplier || 1);
@@ -124,3 +199,8 @@ export function clearTicks() {
   db.prepare('DELETE FROM ticks').run();
   lastTickCleanup = 0;
 }
+
+// initialize from stored history so we don't start from scratch on restart
+seedCandleHistory(getSettings().symbol, getSettings().base_price);
+historySeeded = true;
+loadHistoricState(getSettings().symbol);

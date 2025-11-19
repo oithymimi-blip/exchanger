@@ -3,6 +3,20 @@ import { api } from '../../api'
 import { useAdminAuth } from '../../adminStore'
 
 const currency = (value = 0) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(Number(value) || 0)
+const VERIFICATION_LABELS = {
+  awaiting_approval: 'Awaiting approval',
+  pending: 'Pending documentation',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  not_started: 'Not started'
+}
+const VERIFICATION_CLASSES = {
+  awaiting_approval: 'bg-amber-50 text-amber-600',
+  pending: 'bg-slate-50 text-slate-500',
+  approved: 'bg-emerald-50 text-emerald-600',
+  rejected: 'bg-rose-50 text-rose-600',
+  not_started: 'bg-slate-50 text-slate-500'
+}
 
 export default function AdminUsersPage() {
   const { token, admin } = useAdminAuth()
@@ -110,6 +124,7 @@ export default function AdminUsersPage() {
                 <th className="py-2 text-left">Balance</th>
                 <th className="py-2 text-left">Trades</th>
                 <th className="py-2 text-left">Realized</th>
+                <th className="py-2 text-left">Verification</th>
                 <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -121,18 +136,34 @@ export default function AdminUsersPage() {
               ) : (
                 users.map(user => (
                   <tr key={user.id} className="text-slate-700">
-                    <td className="py-2">
-                      <div className="font-semibold">{user.name || user.email}</div>
-                      <div className="text-xs text-slate-500">{user.email}</div>
-                    </td>
-                    <td className="py-2 capitalize">{user.role}</td>
-                    <td className="py-2">{currency((user.available || 0) + (user.locked || 0))}</td>
-                    <td className="py-2">{user.trade_count}</td>
-                    <td className="py-2">
-                      <span className={Number(user.realized_pnl) >= 0 ? 'text-emerald-600' : 'text-rose-500'}>
-                        {currency(user.realized_pnl)}
-                      </span>
-                    </td>
+                <td className="py-2">
+                  <div className="font-semibold">{user.name || user.email}</div>
+                  <div className="text-xs text-slate-500">{user.email}</div>
+                </td>
+                <td className="py-2 capitalize">{user.role}</td>
+                <td className="py-2">{currency((user.available || 0) + (user.locked || 0))}</td>
+                <td className="py-2">{user.trade_count}</td>
+                <td className="py-2">
+                  <span className={Number(user.realized_pnl) >= 0 ? 'text-emerald-600' : 'text-rose-500'}>
+                    {currency(user.realized_pnl)}
+                  </span>
+                </td>
+                <td className="py-2">
+                  {(() => {
+                    const statusValue = user.verification_status ?? 'not_started'
+                    const statusLabel = VERIFICATION_LABELS[statusValue] ?? VERIFICATION_LABELS.not_started
+                    const statusClass = VERIFICATION_CLASSES[statusValue] ?? VERIFICATION_CLASSES.not_started
+                    const submittedAt = user.verification_submitted_at ? new Date(user.verification_submitted_at).toLocaleString() : ''
+                    return (
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-semibold ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                        <span className="text-[11px] text-slate-400">{submittedAt || '—'}</span>
+                      </div>
+                    )
+                  })()}
+                </td>
                     <td className="py-2 text-right">
                       <button className="text-xs text-rose-500 font-semibold" onClick={() => deleteUser(user.id)}>Delete</button>
                     </td>

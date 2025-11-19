@@ -33,6 +33,23 @@ const selectTradeByIdStmt = db.prepare('SELECT * FROM trades WHERE id = ?');
 const selectOpenTradesStmt = db.prepare(`SELECT * FROM trades WHERE user_id = ? AND status = 'open' ORDER BY created_at ASC`);
 const selectRecentTradesStmt = db.prepare(`SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`);
 const selectSettingsStmt = db.prepare('SELECT pip_size FROM market_settings WHERE id = 1');
+const selectLatestTickStmt = db.prepare('SELECT price FROM ticks WHERE symbol = ? ORDER BY ts DESC LIMIT 1');
+
+function cleanSymbol(value) {
+  if (!value) return null;
+  const cleaned = String(value).replace(/[^A-Za-z]/g, '').toUpperCase();
+  return cleaned || null;
+}
+
+function getLatestPriceForSymbol(symbol) {
+  const normalized = cleanSymbol(symbol);
+  if (!normalized) return null;
+  const row = selectLatestTickStmt.get(normalized);
+  if (row && Number.isFinite(row.price) && row.price > 0) {
+    return Number(row.price);
+  }
+  return null;
+}
 
 function getOrInitBalance(userId) {
   insertBalanceStmt.run(userId, INITIAL_BALANCE, 0);
@@ -52,7 +69,7 @@ function getPipSize() {
 function computeOverview(userId, limit = 10, priceOverride) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 200));
   const balance = getOrInitBalance(userId);
-  const price = priceOverride ?? currentPrice();
+  const fallbackPrice = priceOverride ?? currentPrice();
 
   const openTrades = selectOpenTradesStmt.all(userId);
   let openPnl = 0;
@@ -61,7 +78,8 @@ function computeOverview(userId, limit = 10, priceOverride) {
     const stake = Number(trade.stake_amount || 0);
     if (stake <= 0) continue;
     const direction = trade.side === 'sell' ? -1 : 1;
-    const diff = (price - Number(trade.price || 0)) * direction;
+    const marketPrice = getLatestPriceForSymbol(trade.symbol) ?? fallbackPrice;
+    const diff = (marketPrice - Number(trade.price || 0)) * direction;
     openPnl += diff * stake;
     openPips += diff;
   }
@@ -85,7 +103,7 @@ function computeOverview(userId, limit = 10, priceOverride) {
     openPnl: round2(openPnl),
     openPips: round2(openPips),
     equity: round2(equity),
-    currentPrice: price,
+    currentPrice: fallbackPrice,
     pipSize: getPipSize(),
     marginUsed: round2(marginUsed),
     freeMargin: round2(freeMargin),
@@ -120,7 +138,7 @@ router.get('/overview', requireAuth, (req, res) => {
 
 router.post('/', requireAuth, (req, res) => {
   try {
-    const { side, amount, symbol = 'BTCUSDT' } = req.body || {};
+    const { side, amount, symbol = 'BTCUSDT', price: requestedPrice } = req.body || {};
     const normalizedSide = (side || '').toLowerCase();
     if (!['buy', 'sell'].includes(normalizedSide)) {
       return res.status(400).json({ error: 'side must be buy or sell' });
@@ -135,18 +153,20 @@ router.post('/', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
 
-    const price = currentPrice();
-    if (!Number.isFinite(price) || price <= 0) {
+    const normalizedSymbol = cleanSymbol(symbol) || 'BTCUSDT';
+    const brokerPrice = Number(requestedPrice);
+    const entryPrice = Number.isFinite(brokerPrice) && brokerPrice > 0 ? brokerPrice : currentPrice();
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
       return res.status(500).json({ error: 'Invalid market price' });
     }
 
-    const qty = usdAmount / price;
+    const qty = usdAmount / entryPrice;
     insertTradeStmt.run(
       req.user.id,
-      symbol,
+      normalizedSymbol,
       normalizedSide,
       qty,
-      price,
+      entryPrice,
       'open',
       1,
       0,
@@ -163,16 +183,16 @@ router.post('/', requireAuth, (req, res) => {
       'user',
       'open_trade',
       JSON.stringify({
-        symbol,
+        symbol: normalizedSymbol,
         side: normalizedSide,
-        price,
+        price: entryPrice,
         amount: usdAmount,
         qty
       })
     );
 
-    const overview = computeOverview(req.user.id, 10, price);
-    res.json({ ok: true, price, amount: usdAmount, ...overview });
+    const overview = computeOverview(req.user.id, 10, entryPrice);
+    res.json({ ok: true, price: entryPrice, amount: usdAmount, ...overview });
   } catch (err) {
     console.error('trade error', err);
     res.status(500).json({ error: 'Trade failed' });
@@ -194,13 +214,13 @@ router.post('/:id/close', requireAuth, (req, res) => {
       return res.json({ ok: true, ...overview });
     }
 
-    const price = currentPrice();
+    const marketPrice = getLatestPriceForSymbol(trade.symbol) ?? currentPrice();
     const stake = Number(trade.stake_amount || 0);
     const direction = directionForSide(trade.side);
-    const pnl = (price - Number(trade.price || 0)) * direction * stake;
-    const pips = (price - Number(trade.price || 0)) * direction;
+    const pnl = (marketPrice - Number(trade.price || 0)) * direction * stake;
+    const pips = (marketPrice - Number(trade.price || 0)) * direction;
 
-    updateTradeCloseStmt.run(pnl, price, pips, tradeId);
+    updateTradeCloseStmt.run(pnl, marketPrice, pips, tradeId);
 
     const balance = getOrInitBalance(req.user.id);
     updateBalanceStmt.run(
@@ -218,14 +238,14 @@ router.post('/:id/close', requireAuth, (req, res) => {
         side: trade.side,
         qty: trade.qty,
         entryPrice: trade.price,
-        exitPrice: price,
+        exitPrice: marketPrice,
         pnl,
         pips
       })
     );
 
-    const overview = computeOverview(req.user.id, 10, price);
-    res.json({ ok: true, realizedPnl: pnl, realizedPips: pips, price, ...overview });
+    const overview = computeOverview(req.user.id, 10, marketPrice);
+    res.json({ ok: true, realizedPnl: pnl, realizedPips: pips, price: marketPrice, ...overview });
   } catch (err) {
     console.error('close trade error', err);
     res.status(500).json({ error: 'Failed to close trade' });
@@ -234,16 +254,19 @@ router.post('/:id/close', requireAuth, (req, res) => {
 
 router.post('/close-all', requireAuth, (req, res) => {
   try {
-    const price = currentPrice();
     const openTrades = selectOpenTradesStmt.all(req.user.id);
     let totalPnl = 0;
     let totalPips = 0;
+    let lastPrice = null;
     for (const trade of openTrades) {
       const stake = Number(trade.stake_amount || 0);
+      if (stake <= 0) continue;
       const direction = directionForSide(trade.side);
-      const pnl = (price - Number(trade.price || 0)) * direction * stake;
-      const pips = (price - Number(trade.price || 0)) * direction;
-      updateTradeCloseStmt.run(pnl, price, pips, trade.id);
+      const marketPrice = getLatestPriceForSymbol(trade.symbol) ?? currentPrice();
+      lastPrice = marketPrice;
+      const pnl = (marketPrice - Number(trade.price || 0)) * direction * stake;
+      const pips = (marketPrice - Number(trade.price || 0)) * direction;
+      updateTradeCloseStmt.run(pnl, marketPrice, pips, trade.id);
       totalPnl += pnl;
       totalPips += pips;
       const balance = getOrInitBalance(req.user.id);
@@ -253,19 +276,20 @@ router.post('/close-all', requireAuth, (req, res) => {
         req.user.id
       );
     }
-    const overview = computeOverview(req.user.id, 10, price);
+    const summaryPrice = lastPrice ?? currentPrice();
+    const overview = computeOverview(req.user.id, 10, summaryPrice);
     insertActivityLogStmt.run(
       req.user.id,
       'user',
       'close_all_trades',
       JSON.stringify({
         count: openTrades.length,
-        price,
+        price: summaryPrice,
         realizedPnl: totalPnl,
         realizedPips: totalPips
       })
     );
-    res.json({ ok: true, realizedPnl: totalPnl, realizedPips: totalPips, price, ...overview });
+    res.json({ ok: true, realizedPnl: totalPnl, realizedPips: totalPips, price: summaryPrice, ...overview });
   } catch (err) {
     console.error('close-all error', err);
     res.status(500).json({ error: 'Failed to close all trades' });

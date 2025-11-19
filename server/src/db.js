@@ -172,6 +172,28 @@ CREATE TABLE IF NOT EXISTS notifications (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER UNIQUE NOT NULL,
+  document_type TEXT,
+  document_number TEXT,
+  document_name TEXT,
+  document_country TEXT,
+  document_expires_at TEXT,
+  document_front TEXT,
+  document_back TEXT,
+  selfie TEXT,
+  status TEXT DEFAULT 'pending',
+  notes TEXT,
+  submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  face_similarity REAL DEFAULT 0,
+  face_confidence REAL DEFAULT 0,
+  face_checked_at DATETIME,
+  face_check_notes TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS notification_reads (
   notification_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
@@ -210,6 +232,10 @@ ensureColumn('trades', 'pips_realized', 'pips_realized REAL DEFAULT 0');
 ensureColumn('trades', 'stake_amount', 'stake_amount REAL DEFAULT 0');
 ensureColumn('market_settings', 'pip_size', 'pip_size REAL DEFAULT 0.0001');
 ensureColumn('market_settings', 'speed_multiplier', 'speed_multiplier REAL DEFAULT 1');
+ensureColumn('verifications', 'face_similarity', 'face_similarity REAL DEFAULT 0');
+ensureColumn('verifications', 'face_confidence', 'face_confidence REAL DEFAULT 0');
+ensureColumn('verifications', 'face_checked_at', 'face_checked_at DATETIME');
+ensureColumn('verifications', 'face_check_notes', 'face_check_notes TEXT');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS market_channels (

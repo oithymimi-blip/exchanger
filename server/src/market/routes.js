@@ -15,6 +15,12 @@ const upsertCandleStmt = db.prepare(`
     volume = candles.volume + excluded.volume
 `);
 
+function normalizeSymbol(symbol) {
+  if (typeof symbol !== 'string') return 'BTCUSDT';
+  const cleaned = symbol.replace(/[^A-Za-z]/g, '').toUpperCase();
+  return cleaned || 'BTCUSDT';
+}
+
 const TIMEFRAME_SECONDS = {
   '15s': 15,
   '30s': 30,
@@ -124,7 +130,7 @@ router.get('/state', (req, res) => {
 
 router.get('/candles', (req, res) => {
   const { symbol = 'BTCUSDT', from, to, limit = 500, tf } = req.query;
-  const normalizedSymbol = typeof symbol === 'string' ? symbol.trim().toUpperCase() : 'BTCUSDT';
+  const normalizedSymbol = normalizeSymbol(symbol);
   const intervalSec = parseTimeframe(tf);
   const safeLimit = Math.max(1, Math.min(Number(limit) || 500, 1000));
   const fromTs = from ? Number(from) : undefined;
@@ -142,7 +148,7 @@ router.get('/candles', (req, res) => {
 
 router.post('/otc/tick', (req, res) => {
   const { symbol, price, ts, volume } = req.body ?? {};
-  const normalizedSymbol = typeof symbol === 'string' && symbol.trim().length ? symbol.trim().toUpperCase() : null;
+  const normalizedSymbol = normalizeSymbol(symbol);
   const numericPrice = Number(price);
   if (!normalizedSymbol || !Number.isFinite(numericPrice)) {
     return res.status(400).json({ error: 'symbol and price are required' });

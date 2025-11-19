@@ -71,6 +71,34 @@ const selectActivityLog = db.prepare(`
   LIMIT 20
 `);
 
+const selectVerificationsForAdmin = db.prepare(`
+  SELECT
+    v.id,
+    v.user_id,
+    v.document_type,
+    v.status,
+    v.notes,
+    v.face_similarity,
+    v.face_confidence,
+    v.face_checked_at,
+    v.face_check_notes,
+    v.submitted_at,
+    v.updated_at,
+    u.email,
+    u.name,
+    u.handle
+  FROM verifications v
+  JOIN users u ON u.id = v.user_id
+  ORDER BY v.submitted_at DESC
+  LIMIT 200
+`);
+const updateVerificationStatusStmt = db.prepare(`
+  UPDATE verifications
+  SET status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+  WHERE user_id = ?
+`);
+const ALLOWED_VERIFICATION_STATUSES = new Set(['pending', 'awaiting_approval', 'approved', 'rejected']);
+
 const listSubadminsStmt = db.prepare(`
   SELECT u.id, u.email, u.name, u.created_at, IFNULL(p.permissions, '[]') AS permissions
   FROM users u
@@ -280,16 +308,48 @@ router.get('/users', requireAdminRole('users'), (req, res) => {
            IFNULL(b.available,0) AS available,
            IFNULL(b.locked,0) AS locked,
            COUNT(t.id) AS trade_count,
-           IFNULL(SUM(CASE WHEN t.status = 'closed' THEN t.pnl ELSE 0 END),0) AS realized_pnl
+           IFNULL(SUM(CASE WHEN t.status = 'closed' THEN t.pnl ELSE 0 END),0) AS realized_pnl,
+           v.status AS verification_status,
+           v.submitted_at AS verification_submitted_at,
+           v.updated_at AS verification_updated_at
     FROM users u
     LEFT JOIN balances b ON b.user_id = u.id
     LEFT JOIN trades t ON t.user_id = u.id
+    LEFT JOIN verifications v ON v.user_id = u.id
     WHERE (? = '' OR u.email LIKE ? OR u.name LIKE ? OR u.handle LIKE ?)
     GROUP BY u.id
     ORDER BY u.created_at DESC
     LIMIT 100
   `).all(query, likeQuery, likeQuery, likeQuery);
   res.json(rows);
+});
+
+router.get('/verifications', requireAdminRole('users'), (req, res) => {
+  const rows = selectVerificationsForAdmin.all();
+  res.json(rows);
+});
+
+router.patch('/verifications/:userId', requireAdminRole('users'), (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+  const target = db.prepare('SELECT user_id FROM verifications WHERE user_id = ?').get(userId);
+  if (!target) {
+    return res.status(404).json({ error: 'Verification not found' });
+  }
+  const { status, notes } = req.body || {};
+  const normalizedStatus = (status || '').trim().toLowerCase();
+  if (!ALLOWED_VERIFICATION_STATUSES.has(normalizedStatus)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+  const notesValue = typeof notes === 'string' ? notes.trim() : null;
+  updateVerificationStatusStmt.run(
+    normalizedStatus,
+    notesValue ? notesValue : null,
+    userId
+  );
+  res.json({ ok: true, status: normalizedStatus });
 });
 
 router.delete('/users/:id', requireAdminRole('users'), (req, res) => {

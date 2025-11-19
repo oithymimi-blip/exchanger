@@ -6,6 +6,7 @@ const navItems = [
   { label: 'Dashboard', icon: '📊', path: '/admin', permission: 'analytics' },
   { label: 'Market Control', icon: '⚙️', path: '/admin/market-control', permission: 'market' },
   { label: 'Users', icon: '👥', path: '/admin/users', permission: 'users' },
+  { label: 'Verifications', icon: '📝', path: '/admin/verifications', permission: 'users' },
   { label: 'Notifications', icon: '🔔', path: '/admin/notifications', permission: 'notifications' },
   { label: 'Roles', icon: '🛡️', path: '/admin/roles', permission: 'admin_manage' }
 ]
