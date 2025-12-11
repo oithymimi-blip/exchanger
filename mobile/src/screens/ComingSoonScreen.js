@@ -211,6 +211,8 @@ const DEFAULT_ORDERS = [
   { id: 'ORD-1902', symbol: 'XAUUSD', type: 'market', side: 'buy', volume: 10000, filledAvgPrice: 2352.40, status: 'partial', assetClass: 'forex' }
 ]
 
+const MIN_TRADE_AMOUNT = 0.01
+
 const formatSymbol = (symbol) => {
   if (!symbol) return ''
   if (symbol.includes('/')) return symbol
@@ -222,7 +224,14 @@ const formatSymbol = (symbol) => {
 
 const formatCurrency = (value) => {
   const number = Number(value ?? 0)
-  return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const safeNumber = Number.isFinite(number) ? number : 0
+  return `$${safeNumber.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+const formatSignedCurrency = (value) => {
+  const number = Number(value ?? 0)
+  const sign = number > 0 ? '+' : number < 0 ? '-' : ''
+  return `${sign}${formatCurrency(Math.abs(number))}`
 }
 
 const formatCompactNumber = (value) => {
@@ -294,10 +303,9 @@ export function ComingSoonScreen({ route, navigation }) {
   const [selectedOtcSymbol, setSelectedOtcSymbol] = useState(OTC_PAIRS[0].symbol)
   const [otcTimeframe, setOtcTimeframe] = useState('M15')
   const [otcPickerVisible, setOtcPickerVisible] = useState(false)
-  const [otcLastUpdate, setOtcLastUpdate] = useState(new Date())
   const [otcOrderTab, setOtcOrderTab] = useState('Order Book')
   const enableLegacyTradeExperience = false
-  const [otcQty, setOtcQty] = useState(100)
+  const [otcQty, setOtcQty] = useState(MIN_TRADE_AMOUNT)
   const [otcQtyInput, setOtcQtyInput] = useState(otcQty.toFixed(2))
   const [otcFills, setOtcFills] = useState([])
   const [showTimeframeDropdown, setShowTimeframeDropdown] = useState(false)
@@ -358,6 +366,18 @@ export function ComingSoonScreen({ route, navigation }) {
   const { token } = useAuth()
   const [tradeSyncMsg, setTradeSyncMsg] = useState('')
   const [otcPosition, setOtcPosition] = useState({ qty: 0, avgPrice: 0, realizedPnl: 0 })
+  const [accountBalance, setAccountBalance] = useState({ available: 0, locked: 0, total: 0 })
+  const [accountOpenPnl, setAccountOpenPnl] = useState(0)
+  const [slTpVisible, setSlTpVisible] = useState(false)
+  const [slInput, setSlInput] = useState('')
+  const [tpInput, setTpInput] = useState('')
+  const [slLevel, setSlLevel] = useState(null)
+  const [tpLevel, setTpLevel] = useState(null)
+  const [pendingSide, setPendingSide] = useState('buy')
+  const [pendingPrice, setPendingPrice] = useState('')
+  const [pendingAmount, setPendingAmount] = useState(MIN_TRADE_AMOUNT.toFixed(2))
+  const [pendingOrders, setPendingOrders] = useState([])
+  const [chartHeight, setChartHeight] = useState(320)
 
   useEffect(() => {
     const desiredSegment = activeSegment === 'Forex' ? 'OTC' : activeSegment
@@ -448,7 +468,6 @@ export function ComingSoonScreen({ route, navigation }) {
       if (seriesUpdated) {
         setOtcSeriesVersion(prev => prev + 1)
       }
-      setOtcLastUpdate(new Date())
       if (latestSelectedPrice != null) {
         persistOtcTick(selectedOtcSymbol, latestSelectedPrice)
       }
@@ -678,10 +697,6 @@ export function ComingSoonScreen({ route, navigation }) {
     otcSeriesMetaRef.current[selectedOtcSymbol] = { timeframe: otcTimeframe }
     return seeded.slice()
   }, [selectedOtcSymbol, selectedOtcBasePrice, otcTimeframe, otcSeriesVersion, otcHistoryLoaded])
-  const otcTimestamp = useMemo(
-    () => new Date(otcLastUpdate).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    [otcLastUpdate]
-  )
   const tradingViewSymbol = useMemo(() => {
     const pairSymbol = selectedOtcPair?.symbol ?? 'BTC/USDT'
     const cleaned = pairSymbol.replace('/', '').toUpperCase()
@@ -774,6 +789,16 @@ export function ComingSoonScreen({ route, navigation }) {
   }, [])
   const syncPositionFromOverview = useCallback((overview) => {
     if (!overview) return
+    const balance = overview.balance || {}
+    const available = Number(balance.available ?? 0)
+    const locked = Number(balance.locked ?? 0)
+    const total = Number(balance.total ?? available + locked)
+    const safeAvailable = Number.isFinite(available) ? available : 0
+    const safeLocked = Number.isFinite(locked) ? locked : 0
+    const safeTotal = Number.isFinite(total) ? total : safeAvailable + safeLocked
+    setAccountBalance({ available: safeAvailable, locked: safeLocked, total: safeTotal })
+    const openPnl = Number(overview.openPnl ?? 0)
+    setAccountOpenPnl(Number.isFinite(openPnl) ? openPnl : 0)
     const openTrades = Array.isArray(overview.openTrades) ? overview.openTrades : []
     const relevant = openTrades.filter(trade => (trade.symbol || '').toUpperCase() === normalizedOtcSymbol)
     if (!relevant.length) {
@@ -805,7 +830,11 @@ export function ComingSoonScreen({ route, navigation }) {
   }, [normalizedOtcSymbol])
 
   const refreshTradeOverview = useCallback(() => {
-    if (!token) return
+    if (!token) {
+      setAccountBalance({ available: 0, locked: 0, total: 0 })
+      setAccountOpenPnl(0)
+      return
+    }
     api(token).get('/api/trades/overview?limit=20')
       .then(res => syncPositionFromOverview(res.data))
       .catch(err => console.warn('overview error', err?.response?.data?.error || err?.message))
@@ -847,9 +876,9 @@ export function ComingSoonScreen({ route, navigation }) {
       return { qty: newQty, avgPrice: newAvg, realizedPnl: realized }
     })
   }, [])
-  const handleOtcExecution = async (side, overrideQty) => {
+  const handleOtcExecution = useCallback(async (side, overrideQty) => {
     const requestedAmount = overrideQty ?? otcQty
-    const normalizedAmount = Math.max(1, Math.abs(Number(requestedAmount) || 0))
+    const normalizedAmount = Math.max(MIN_TRADE_AMOUNT, Math.abs(Number(requestedAmount) || 0))
     const sanitizedAmount = Number(normalizedAmount.toFixed(2))
     setTicketSide(side)
     const fillPrice = side === 'buy' ? otcAsk : otcBid
@@ -878,7 +907,6 @@ export function ComingSoonScreen({ route, navigation }) {
     if (appendOtcSeriesPoint(selectedOtcSymbol, fillPrice, otcTimeframe)) {
       setOtcSeriesVersion(prev => prev + 1)
     }
-    setOtcLastUpdate(new Date())
     persistOtcTick(selectedOtcSymbol, fillPrice)
     updateOtcPosition(side, qty, fillPrice)
     const amountUsd = sanitizedAmount
@@ -901,7 +929,24 @@ export function ComingSoonScreen({ route, navigation }) {
     } else {
       setTradeSyncMsg('Sign in to persist OTC trades to your account.')
     }
-  }
+  }, [
+    otcQty,
+    otcAsk,
+    otcBid,
+    otcSpreadValue,
+    selectedOtcSymbol,
+    selectedOtcPair,
+    otcTimeframe,
+    ensureSeriesForSymbol,
+    appendOtcSeriesPoint,
+    persistOtcTick,
+    updateOtcPosition,
+    token,
+    normalizedOtcSymbol,
+    refreshTradeOverview,
+    setTradeSyncMsg,
+    syncPositionFromOverview
+  ])
   const latestBar = chartSeries?.length ? chartSeries[chartSeries.length - 1] : null
   const barTimestamp = formatBarTime(latestBar)
   const chartExtremes = useMemo(() => {
@@ -955,6 +1000,14 @@ export function ComingSoonScreen({ route, navigation }) {
     const direction = side === 'sell' ? -1 : 1
     return Number(((mark - price) * direction * quantity).toFixed(2))
   }, [otcAsk, otcBid])
+  const formattedOtcPnl = useMemo(
+    () => (token ? formatSignedCurrency(accountOpenPnl) : '—'),
+    [token, accountOpenPnl]
+  )
+  const formattedOtcBalance = useMemo(
+    () => (token ? formatCurrency(accountBalance.total ?? 0) : '—'),
+    [token, accountBalance.total]
+  )
   const handleSelectTimeframe = useCallback((frame) => {
     setOtcTimeframe(frame)
     setShowTimeframeDropdown(false)
@@ -980,7 +1033,7 @@ export function ComingSoonScreen({ route, navigation }) {
 
   const adjustOtcQty = (delta) => {
     setOtcQty(prev => {
-      const next = Math.max(1, +(prev + delta).toFixed(2))
+      const next = Math.max(MIN_TRADE_AMOUNT, +(prev + delta).toFixed(2))
       setOtcQtyInput(next.toFixed(2))
       return next
     })
@@ -991,9 +1044,48 @@ export function ComingSoonScreen({ route, navigation }) {
     setOtcQtyInput(sanitized)
     const parsed = Number(sanitized)
     if (!Number.isFinite(parsed)) return
-    const normalized = Math.max(1, Number(parsed.toFixed(2)))
+    const normalized = Math.max(MIN_TRADE_AMOUNT, Number(parsed.toFixed(2)))
     setOtcQty(normalized)
   }
+
+  const handleSaveSlTp = useCallback(() => {
+    setSlTpVisible(false)
+    const parts = []
+    const slNumeric = Number(slInput)
+    const tpNumeric = Number(tpInput)
+    if (Number.isFinite(slNumeric) && slNumeric > 0) {
+      parts.push(`SL ${slNumeric}`)
+      setSlLevel(slNumeric)
+    }
+    if (Number.isFinite(tpNumeric) && tpNumeric > 0) {
+      parts.push(`TP ${tpNumeric}`)
+      setTpLevel(tpNumeric)
+    }
+    if (pendingPrice && pendingAmount) {
+      const amountNum = Math.max(MIN_TRADE_AMOUNT, Number(pendingAmount) || 0)
+      parts.push(`Pending ${pendingSide.toUpperCase()} @ ${pendingPrice} for ${amountNum.toFixed(2)}`)
+      const priceNum = Number(pendingPrice)
+      if (Number.isFinite(priceNum) && amountNum) {
+        setPendingOrders(prev => ([
+          ...prev,
+          {
+            id: `PEND-${Date.now()}`,
+            side: pendingSide,
+            price: priceNum,
+            amount: amountNum.toFixed(2),
+            createdAt: new Date().toISOString()
+          }
+        ]))
+      }
+    }
+    if (parts.length) {
+      setTradeSyncMsg(parts.join(' • '))
+    }
+    setSlInput('')
+    setTpInput('')
+    setPendingPrice('')
+    setPendingAmount(MIN_TRADE_AMOUNT.toFixed(2))
+  }, [pendingAmount, pendingPrice, pendingSide, slInput, tpInput])
 
   const handleCloseTrade = useCallback(async (trade) => {
     if (!token || !trade?.id) {
@@ -1006,6 +1098,7 @@ export function ComingSoonScreen({ route, navigation }) {
       const pnl = Number(response.data?.realizedPnl ?? 0)
       setTradeSyncMsg(`${trade.side === 'buy' ? 'Buy' : 'Sell'} closed • ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`)
       syncPositionFromOverview(response.data)
+      setOpenTradesList(prev => prev.filter(t => t.id !== trade.id))
     } catch (err) {
       setTradeSyncMsg(err?.response?.data?.error || 'Failed to close trade.')
     } finally {
@@ -1021,12 +1114,35 @@ export function ComingSoonScreen({ route, navigation }) {
       const pnl = Number(response.data?.realizedPnl ?? 0)
       setTradeSyncMsg(`Closed all • ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`)
       syncPositionFromOverview(response.data)
+      setOpenTradesList([])
     } catch (err) {
       setTradeSyncMsg(err?.response?.data?.error || 'Failed to close all trades.')
     } finally {
       setClosingAllTrades(false)
     }
   }, [token, openTradesList.length, syncPositionFromOverview])
+
+  useEffect(() => {
+    if (!pendingOrders.length) return
+    const currentPrice = Number(selectedOtcPair?.price ?? 0)
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) return
+    let changed = false
+    const remaining = []
+    pendingOrders.forEach(order => {
+      const shouldTrigger = order.side === 'buy'
+        ? currentPrice <= order.price
+        : currentPrice >= order.price
+      if (shouldTrigger) {
+        changed = true
+        handleOtcExecution(order.side, Number(order.amount))
+      } else {
+        remaining.push(order)
+      }
+    })
+    if (changed) {
+      setPendingOrders(remaining)
+    }
+  }, [pendingOrders, selectedOtcPair, handleOtcExecution])
 
   const renderPlaceholder = (label = 'Forex') => (
     <View style={styles.blankOtc}>
@@ -1037,38 +1153,101 @@ export function ComingSoonScreen({ route, navigation }) {
   )
 
   const renderOtcDesk = () => {
-    const status = selectedOtcPair?.status ?? 'live'
-    const statusLabel = OTC_STATUS_LABELS[status] ?? 'Live'
-    const statusColor = OTC_STATUS_COLORS[status] ?? BINANCE_THEME.muted
     const tradesToDisplay = token
       ? openTradesList.filter(trade => (trade.symbol || '').toUpperCase() === normalizedOtcSymbol)
       : otcFills
+    const levelAnnotations = []
+    tradesToDisplay.forEach(trade => {
+      levelAnnotations.push({
+        label: `${trade.side === 'buy' ? 'Buy' : 'Sell'} @ ${formatNumber(trade.price, 2)}`,
+        tone: trade.side === 'buy' ? colors.success : colors.danger,
+        price: Number(trade.price)
+      })
+    })
+    if (Number.isFinite(slLevel) && slLevel > 0) {
+      levelAnnotations.push({ label: `SL @ ${formatNumber(slLevel, 2)}`, tone: colors.danger, price: slLevel })
+    }
+    if (Number.isFinite(tpLevel) && tpLevel > 0) {
+      levelAnnotations.push({ label: `TP @ ${formatNumber(tpLevel, 2)}`, tone: colors.success, price: tpLevel })
+    }
+    pendingOrders.forEach(order => {
+      levelAnnotations.push({
+        label: `Pending ${order.side === 'buy' ? 'Buy' : 'Sell'} @ ${formatNumber(order.price, 2)}`,
+        tone: order.side === 'buy' ? colors.success : colors.danger,
+        price: Number(order.price)
+      })
+    })
+    let otcMin = Number.POSITIVE_INFINITY
+    let otcMax = Number.NEGATIVE_INFINITY
+    otcSeriesData.forEach(bar => {
+      const vals = [bar.low, bar.high, bar.close, bar.open]
+      vals.forEach(v => {
+        const n = Number(v)
+        if (Number.isFinite(n)) {
+          otcMin = Math.min(otcMin, n)
+          otcMax = Math.max(otcMax, n)
+        }
+      })
+    })
+    if (!otcSeriesData.length || !Number.isFinite(otcMin) || !Number.isFinite(otcMax) || otcMin === otcMax) {
+      const fallback = otcMidPrice || 1
+      otcMin = fallback * 0.98
+      otcMax = fallback * 1.02
+    }
+
+    const priceToY = (price) => {
+      if (!Number.isFinite(price) || !Number.isFinite(otcMin) || !Number.isFinite(otcMax)) return null
+      const range = Math.max(otcMax - otcMin, 0.0001)
+      const clamped = Math.min(Math.max(price, otcMin), otcMax)
+      const pct = (otcMax - clamped) / range
+      return pct * Math.max(chartHeight, 1)
+    }
     return (
       <ScrollView
         contentContainerStyle={styles.otcShell}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.otcCompositeCard}>
-          <View style={styles.otcChartCard}>
-            <View style={styles.otcChartHeader}>
-              <View>
-                <Text style={styles.otcChartTitle}>Real-time OTC chart</Text>
-                <TouchableOpacity
-                  style={styles.otcChartSubtitleDrop}
-                  onPress={() => setOtcPickerVisible(true)}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.otcChartSubtitleText}>
-                    <Text style={styles.otcChartSubtitlePair}>{selectedOtcPair?.symbol}</Text>
-                    <Text style={styles.otcChartSubtitleFrame}>{otcTimeframe} frame</Text>
+          <View style={styles.otcCompositeCard}>
+            <View style={styles.otcChartCard}>
+              <View style={styles.otcChartHeader}>
+                <View style={[styles.otcHeaderMetrics, { justifyContent: 'flex-start' }]}>
+                  <View style={styles.otcHeaderChip}>
+                    <Feather name="dollar-sign" size={12} color={BINANCE_THEME.muted} />
+                    <View style={styles.otcHeaderChipText}>
+                    <Text style={styles.otcMetricLabel}>Balance</Text>
+                    <Text
+                      style={styles.otcMetricValue}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {formattedOtcBalance}
+                    </Text>
                   </View>
-                  <Feather name="chevron-down" size={14} color={BINANCE_THEME.text} />
-                </TouchableOpacity>
+                </View>
+                <View style={[styles.otcHeaderChip, accountOpenPnl < 0 && styles.otcHeaderChipNegative]}>
+                  <Feather
+                    name={accountOpenPnl >= 0 ? 'trending-up' : 'trending-down'}
+                    size={12}
+                    color={accountOpenPnl >= 0 ? colors.success : colors.danger}
+                  />
+                  <View style={styles.otcHeaderChipText}>
+                    <Text style={styles.otcMetricLabel}>PNL</Text>
+                    <Text style={[
+                      styles.otcMetricValue,
+                      accountOpenPnl > 0 ? styles.pnlPositive : accountOpenPnl < 0 ? styles.pnlNegative : null
+                    ]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {formattedOtcPnl}
+                    </Text>
+                  </View>
+                </View>
               </View>
-              <View style={styles.otcChartPill}>
-                <Feather name="clock" size={12} color={BINANCE_THEME.muted} />
-                <Text style={styles.otcChartPillText}>{otcTimestamp}</Text>
-              </View>
+              <TouchableOpacity style={styles.slTpButton} onPress={() => setSlTpVisible(true)} activeOpacity={0.85}>
+                <Feather name="target" size={14} color="#FFFFFF" />
+                <Text style={styles.slTpButtonText}>SL / TP</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.otcDropdownRow}>
@@ -1085,21 +1264,72 @@ export function ComingSoonScreen({ route, navigation }) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.otcDropdownPicker}
-                onPress={() => setShowIndicatorDropdown(true)}
+                onPress={() => setOtcPickerVisible(true)}
                 activeOpacity={0.85}
               >
-                <Text style={styles.otcDropdownLabel}>Indicator</Text>
+                <Text style={styles.otcDropdownLabel}>Pair</Text>
                 <View style={styles.otcDropdownValueRow}>
-                  <Text style={styles.otcDropdownValue}>{selectedIndicator}</Text>
+                  <Text style={styles.otcDropdownValue}>{`${selectedOtcPair?.symbol || 'BTC/USDT'} ${otcTimeframe}`}</Text>
                   <Feather name="chevron-down" size={12} color={BINANCE_THEME.text} />
                 </View>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.otcChartWrapper}>
+            <View
+              style={styles.otcChartWrapper}
+              onLayout={e => setChartHeight(e?.nativeEvent?.layout?.height ?? 320)}
+            >
               <View style={styles.otcPriceOverlay}>
                 <Text style={styles.otcPriceOverlayText}>{otcMidPrice.toFixed(3)}</Text>
                 <Text style={styles.otcPriceOverlaySub}>{formatPercent(selectedOtcPair?.change ?? 0)}</Text>
+              </View>
+              <View style={styles.otcMetricOverlay} pointerEvents="box-none">
+                <View style={styles.otcMetricChip}>
+                  <Feather name="dollar-sign" size={12} color={BINANCE_THEME.muted} />
+                  <View style={styles.otcMetricText}>
+                    <Text style={styles.otcMetricLabel}>Balance</Text>
+                    <Text style={styles.otcMetricValue}>{formattedOtcBalance}</Text>
+                  </View>
+                </View>
+                <View style={[styles.otcMetricChip, accountOpenPnl < 0 && styles.otcMetricChipNegative]}>
+                  <Feather
+                    name={accountOpenPnl >= 0 ? 'trending-up' : 'trending-down'}
+                    size={12}
+                    color={accountOpenPnl >= 0 ? colors.success : colors.danger}
+                  />
+                  <View style={styles.otcMetricText}>
+                    <Text style={styles.otcMetricLabel}>PNL</Text>
+                    <Text style={[
+                      styles.otcMetricValue,
+                      accountOpenPnl > 0 ? styles.pnlPositive : accountOpenPnl < 0 ? styles.pnlNegative : null
+                    ]}
+                    >
+                      {formattedOtcPnl}
+                    </Text>
+                  </View>
+                </View>
+                {levelAnnotations.length ? (
+                  <View style={styles.levelLinesOverlay} pointerEvents="none">
+                    {levelAnnotations.slice(0, 8).map((item, idx) => {
+                      const y = priceToY(item.price)
+                      if (y == null || !Number.isFinite(y)) return null
+                      const clampedY = Math.max(0, Math.min(y, Math.max(chartHeight - 4, 0)))
+                      return (
+                        <View key={`${item.label}-${idx}`} style={[styles.levelLineAbs, { top: clampedY }]}>
+                          <View style={[styles.levelLineStroke, { backgroundColor: `${item.tone}55` }]} />
+                          <View style={[styles.levelLineMarker, { borderColor: `${item.tone}AA`, backgroundColor: '#FFFFFF' }]}>
+                            <View style={[styles.levelLineDot, { backgroundColor: item.tone }]} />
+                          </View>
+                          <View style={[styles.levelLineTag, { borderColor: `${item.tone}AA`, backgroundColor: '#FFFFFFF2' }]}>
+                            <Text style={[styles.levelLineText, { color: item.tone }]} numberOfLines={1} ellipsizeMode="tail">
+                              {item.label}
+                            </Text>
+                          </View>
+                        </View>
+                      )
+                    })}
+                  </View>
+                ) : null}
               </View>
               {loadingOtcHistory && (
                 <View style={styles.chartLoader}>
@@ -1292,6 +1522,129 @@ export function ComingSoonScreen({ route, navigation }) {
             ))}
           </View>
         </View>
+        <Modal
+          visible={slTpVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setSlTpVisible(false)}
+        >
+          <View style={styles.slTpModalBackdrop}>
+            <View style={styles.slTpModal}>
+              <View style={styles.slTpHeader}>
+                <Text style={styles.slTpTitle}>Set SL / TP</Text>
+                <Text style={styles.slTpSubtitle}>Protect your trade with clear exit levels.</Text>
+              </View>
+              <View style={styles.slTpInputRow}>
+                <View style={styles.slTpInputBlock}>
+                  <Text style={styles.slTpLabel}>Stop Loss</Text>
+                  <TextInput
+                    style={styles.slTpInput}
+                    value={slInput}
+                    onChangeText={setSlInput}
+                    keyboardType="numeric"
+                    placeholder="e.g. 92500"
+                    placeholderTextColor="#9CA3AF"
+                  />
+                </View>
+                <View style={styles.slTpInputBlock}>
+                  <Text style={styles.slTpLabel}>Take Profit</Text>
+                  <TextInput
+                    style={styles.slTpInput}
+                    value={tpInput}
+                    onChangeText={setTpInput}
+                    keyboardType="numeric"
+                    placeholder="e.g. 98000"
+                    placeholderTextColor="#9CA3AF"
+                  />
+                </View>
+              </View>
+              <View style={styles.pendingSection}>
+                <View style={styles.pendingHeader}>
+                  <Text style={styles.slTpTitle}>Pending order</Text>
+                  <View style={styles.pendingSideToggle}>
+                    <TouchableOpacity
+                      style={[styles.pendingSideButton, pendingSide === 'buy' && styles.pendingSideButtonActive]}
+                      onPress={() => setPendingSide('buy')}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.pendingSideText, pendingSide === 'buy' && styles.pendingSideTextActive]}>Buy</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.pendingSideButton, pendingSide === 'sell' && styles.pendingSideButtonActive]}
+                      onPress={() => setPendingSide('sell')}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.pendingSideText, pendingSide === 'sell' && styles.pendingSideTextActive]}>Sell</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={styles.pendingInputs}>
+                  <View style={styles.slTpInputBlock}>
+                    <Text style={styles.slTpLabel}>Trigger price</Text>
+                    <TextInput
+                      style={styles.slTpInput}
+                      value={pendingPrice}
+                      onChangeText={setPendingPrice}
+                      keyboardType="numeric"
+                      placeholder={otcMidPrice.toFixed(2)}
+                      placeholderTextColor="#9CA3AF"
+                    />
+                  </View>
+                  <View style={styles.slTpInputBlock}>
+                    <Text style={styles.slTpLabel}>Amount (USD)</Text>
+                    <TextInput
+                      style={styles.slTpInput}
+                      value={pendingAmount}
+                      onChangeText={setPendingAmount}
+                      keyboardType="numeric"
+                      placeholder={MIN_TRADE_AMOUNT.toFixed(2)}
+                      placeholderTextColor="#9CA3AF"
+                    />
+                  </View>
+                </View>
+                <Text style={styles.pendingHint}>We&apos;ll place a {pendingSide} order when your trigger price hits.</Text>
+                {pendingOrders.length ? (
+                  <View style={styles.pendingList}>
+                    {pendingOrders.map(order => (
+                      <View key={order.id} style={styles.pendingRow}>
+                        <View style={styles.pendingRowLeft}>
+                          <Text style={[
+                            styles.pendingSideText,
+                            order.side === 'buy' ? styles.pnlPositive : styles.pnlNegative
+                          ]}
+                          >
+                            {order.side === 'buy' ? 'Buy' : 'Sell'}
+                          </Text>
+                          <Text style={styles.pendingMeta}>{formatNumber(order.price, 2)} · {formatNumber(order.amount, 2)}</Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setPendingOrders(prev => prev.filter(p => p.id !== order.id))}>
+                          <Feather name="x" size={16} color={BINANCE_THEME.muted} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.slTpActionRow}>
+                <TouchableOpacity
+                  style={styles.slTpGhostButton}
+                  onPress={() => {
+                    setSlTpVisible(false)
+                    setSlInput('')
+                    setTpInput('')
+                    setPendingPrice('')
+                    setPendingAmount(MIN_TRADE_AMOUNT.toFixed(2))
+                  }}
+                >
+                  <Text style={styles.slTpGhostText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.slTpPrimaryButton} onPress={handleSaveSlTp} activeOpacity={0.9}>
+                  <Text style={styles.slTpPrimaryText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     )
   }
@@ -2216,10 +2569,47 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center'
   },
-  otcChartTitle: {
-    fontSize: 14,
+  otcHeaderMetrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    flexShrink: 1
+  },
+  otcHeaderChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm * 0.9,
+    paddingVertical: spacing.xs * 0.45,
+    borderRadius: 999,
+    backgroundColor: '#F4F7FF',
+    borderWidth: 1,
+    borderColor: '#E5E9F0',
+    flexShrink: 1
+  },
+  otcHeaderChipNegative: {
+    backgroundColor: '#FFF5F5'
+  },
+  otcHeaderChipText: {
+    gap: 2,
+    flexShrink: 1,
+    minWidth: 0
+  },
+  slTpButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0B9EDB',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs * 0.5,
+    borderRadius: 999
+  },
+  slTpButtonText: {
+    color: '#FFFFFF',
     fontWeight: '700',
-    color: BINANCE_THEME.text
+    fontSize: 12
   },
   otcChartSubtitle: {
     fontSize: 12,
@@ -2312,10 +2702,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: BINANCE_THEME.muted
   },
-  otcStatusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 999
+  otcChartMetrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs
   },
   otcChartPill: {
     flexDirection: 'row',
@@ -2326,9 +2716,231 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#F4F7FF'
   },
-  otcChartPillText: {
+  otcMetricPill: {
+    backgroundColor: '#F4F7FF'
+  },
+  otcMetricOverlay: {
+    position: 'absolute',
+    top: spacing.xs,
+    right: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs
+  },
+  otcMetricChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs * 0.6,
+    backgroundColor: '#FFFFFFDD',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E9F0'
+  },
+  otcMetricChipNegative: {
+    backgroundColor: '#FFF5F5'
+  },
+  otcMetricText: {
+    gap: 2
+  },
+  otcMetricLabel: {
+    fontSize: 10,
+    color: BINANCE_THEME.muted
+  },
+  otcMetricValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: BINANCE_THEME.text
+  },
+  slTpModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.md
+  },
+  slTpModal: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: spacing.md,
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
+  },
+  slTpHeader: {
+    gap: 4
+  },
+  slTpTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: BINANCE_THEME.text
+  },
+  slTpSubtitle: {
+    fontSize: 12,
+    color: BINANCE_THEME.muted
+  },
+  slTpInputRow: {
+    flexDirection: 'row',
+    gap: spacing.sm
+  },
+  slTpInputBlock: {
+    flex: 1,
+    gap: 6
+  },
+  slTpLabel: {
+    fontSize: 12,
+    color: BINANCE_THEME.muted,
+    fontWeight: '600'
+  },
+  slTpInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    fontSize: 14,
+    color: BINANCE_THEME.text
+  },
+  slTpActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm
+  },
+  slTpGhostButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs * 0.9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D1D5DB'
+  },
+  slTpGhostText: {
+    fontSize: 13,
+    color: BINANCE_THEME.text,
+    fontWeight: '600'
+  },
+  slTpPrimaryButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs * 0.9,
+    borderRadius: 10,
+    backgroundColor: '#0B9EDB'
+  },
+  slTpPrimaryText: {
+    fontSize: 13,
+    color: '#FFFFFF',
+    fontWeight: '700'
+  },
+  pendingSection: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
+  },
+  pendingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  pendingSideToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#E5E7EB',
+    borderRadius: 999,
+    padding: 2
+  },
+  pendingSideButton: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs * 0.6,
+    borderRadius: 999
+  },
+  pendingSideButtonActive: {
+    backgroundColor: '#FFFFFF',
+    elevation: 1
+  },
+  pendingSideText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: BINANCE_THEME.muted
+  },
+  pendingSideTextActive: {
+    color: BINANCE_THEME.text
+  },
+  pendingInputs: {
+    flexDirection: 'row',
+    gap: spacing.sm
+  },
+  pendingHint: {
     fontSize: 11,
     color: BINANCE_THEME.muted
+  },
+  pendingList: {
+    marginTop: spacing.xs,
+    gap: spacing.xs
+  },
+  pendingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF'
+  },
+  pendingRowLeft: {
+    gap: 4
+  },
+  pendingMeta: {
+    fontSize: 11,
+    color: BINANCE_THEME.muted
+  },
+  levelLinesOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 5
+  },
+  levelLineAbs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'absolute',
+    left: spacing.sm,
+    right: spacing.sm,
+    gap: spacing.xs
+  },
+  levelLineStroke: {
+    height: 1,
+    flex: 1,
+    borderRadius: 2,
+    opacity: 0.7
+  },
+  levelLineMarker: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  levelLineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4
+  },
+  levelLineTag: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs * 0.3,
+    borderRadius: 8,
+    borderWidth: 1
+  },
+  levelLineText: {
+    fontSize: 11,
+    fontWeight: '700'
   },
   otcChartWrapper: {
     borderRadius: 16,

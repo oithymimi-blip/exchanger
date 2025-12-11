@@ -232,6 +232,7 @@ ensureColumn('trades', 'pips_realized', 'pips_realized REAL DEFAULT 0');
 ensureColumn('trades', 'stake_amount', 'stake_amount REAL DEFAULT 0');
 ensureColumn('market_settings', 'pip_size', 'pip_size REAL DEFAULT 0.0001');
 ensureColumn('market_settings', 'speed_multiplier', 'speed_multiplier REAL DEFAULT 1');
+ensureColumn('verifications', 'document_birthdate', 'document_birthdate TEXT');
 ensureColumn('verifications', 'face_similarity', 'face_similarity REAL DEFAULT 0');
 ensureColumn('verifications', 'face_confidence', 'face_confidence REAL DEFAULT 0');
 ensureColumn('verifications', 'face_checked_at', 'face_checked_at DATETIME');

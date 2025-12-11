@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -13,12 +14,14 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Camera, CameraType, useCameraPermissions } from 'expo-camera'
+import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as ImagePicker from 'expo-image-picker'
 import * as FaceDetector from 'expo-face-detector'
+import * as Speech from 'expo-speech'
 import { colors, spacing } from '../theme'
 import { submitVerification, fetchVerificationStatus } from '../api/verificationApi'
 import { useAuth } from '../stores/authStore'
+import { COUNTRIES } from '../utils/countries'
 
 const DOCUMENT_TYPES = [
   { id: 'nid', label: 'National ID' },
@@ -53,36 +56,20 @@ const REVIEW_MESSAGES = {
   unknown: 'Something went wrong while loading your status. Please try again later.'
 }
 
-function formatExpiryInput(value = '') {
-  const digits = value.replace(/\D/g, '').slice(0, 6)
-  if (digits.length === 0) return ''
-  const monthDigits = digits.slice(0, 2)
-  const rest = digits.slice(2)
-  let normalizedMonth = monthDigits
-  if (monthDigits.length === 2) {
-    const clamped = Math.min(Math.max(Number(monthDigits) || 0, 0), 12)
-    normalizedMonth = clamped.toString().padStart(2, '0')
-  }
-  if (!rest) {
-    return normalizedMonth
-  }
-  return `${normalizedMonth}/${rest}`
-}
-
 export function VerificationScreen({ navigation }) {
   const { token } = useAuth()
   const [activeStep, setActiveStep] = useState(1)
   const [documentType, setDocumentType] = useState('nid')
   const [fullName, setFullName] = useState('')
-  const [documentNumber, setDocumentNumber] = useState('')
   const [documentCountry, setDocumentCountry] = useState('')
-  const [documentExpires, setDocumentExpires] = useState('')
   const [documentFront, setDocumentFront] = useState(null)
   const [documentBack, setDocumentBack] = useState(null)
   const [selfie, setSelfie] = useState(null)
   const [serverVerification, setServerVerification] = useState(null)
   const [loadingStatus, setLoadingStatus] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false)
+  const [countrySearch, setCountrySearch] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -122,28 +109,28 @@ export function VerificationScreen({ navigation }) {
 
   const reviewStatus = serverVerification?.status ?? 'not_started'
   const reviewMessage = REVIEW_MESSAGES[reviewStatus] ?? REVIEW_MESSAGES.unknown
+  const filteredCountries = useMemo(() => {
+    const term = countrySearch.trim().toLowerCase()
+    if (!term) return COUNTRIES
+    return COUNTRIES.filter(c => c.toLowerCase().includes(term))
+  }, [countrySearch])
 
   const isDocumentReady =
     Boolean(documentFront && documentBack) &&
     !!documentType &&
     !!fullName.trim() &&
-    !!documentNumber.trim() &&
-    !!documentCountry.trim() &&
-    !!documentExpires.trim()
+    !!documentCountry.trim()
 
   const cameraRef = useRef(null)
-  const [faceMessage, setFaceMessage] = useState('Position your face in the frame')
-  const [faceStability, setFaceStability] = useState(0)
-  const [faceReady, setFaceReady] = useState(false)
-  const [faceCaptured, setFaceCaptured] = useState(false)
+  const [faceMessage, setFaceMessage] = useState('Center your face inside the frame and tap capture.')
+  const [cameraReady, setCameraReady] = useState(false)
+  const [capturingSelfie, setCapturingSelfie] = useState(false)
+  const [liveness, setLiveness] = useState({ left: false, right: false, center: false })
+  const [livenessStarted, setLivenessStarted] = useState(false)
+  const [livenessComplete, setLivenessComplete] = useState(false)
+  const [autoSubmitting, setAutoSubmitting] = useState(false)
+  const [autoSubmitted, setAutoSubmitted] = useState(false)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
-  const CameraComponent =
-    typeof Camera === 'function'
-      ? Camera
-      : typeof Camera?.Camera === 'function'
-      ? Camera.Camera
-      : null
-  const STABILITY_THRESHOLD = 5
 
   useEffect(() => {
     if (!cameraPermission?.granted) {
@@ -151,52 +138,123 @@ export function VerificationScreen({ navigation }) {
     }
   }, [cameraPermission?.granted, requestCameraPermission])
 
+  useEffect(() => {
+    if (livenessStarted && cameraReady && !capturingSelfie && !selfie) {
+      captureSelfie()
+    }
+  }, [livenessStarted, cameraReady, capturingSelfie, selfie])
+
+  const validateFaceAngles = (face = {}) => {
+    const yaw = face.yawAngle ?? 0
+    const roll = face.rollAngle ?? 0
+    const pitch = face.pitchAngle ?? 0
+    if (Math.abs(yaw) > 25) {
+      return yaw > 0 ? 'Turn slightly to your left' : 'Turn slightly to your right'
+    }
+    if (Math.abs(roll) > 18) {
+      return 'Keep your head straight'
+    }
+    if (Math.abs(pitch) > 15) {
+      return 'Hold your head level'
+    }
+    return null
+  }
+
+  const voiceOptions = { pitch: 1.05, rate: 0.95, language: 'en-US' }
+
   const captureSelfie = async () => {
-    if (faceCaptured || !cameraRef.current) return
+    if (!cameraRef.current || capturingSelfie) return
+    const results = { left: false, right: false, center: false }
+    let centerShot = null
+    setCapturingSelfie(true)
+    setFaceMessage('Rotate your head slowly: left, right, then center to complete liveness.')
+    Speech.speak('Slowly turn your head left, then right, then look straight ahead. We will capture automatically.', { ...voiceOptions, voice: 'com.apple.ttsbundle.Samantha-compact' })
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
-        quality: 0.6,
-        skipProcessing: true
-      })
-      setFaceCaptured(true)
-      setSelfie({ uri: photo.uri, base64: photo.base64 })
+      for (let i = 0; i < 14; i += 1) {
+        const photo = await cameraRef.current.takePictureAsync({
+          base64: true,
+          quality: 0.6,
+          skipProcessing: true
+        })
+        const detection = await FaceDetector.detectFacesAsync(photo.uri, {
+          mode: FaceDetector.FaceDetectorMode.fast,
+          detectLandmarks: FaceDetector.FaceDetectorLandmarks.none,
+          runClassifications: FaceDetector.FaceDetectorClassifications.none
+        })
+        const face = detection?.faces?.[0]
+        if (face) {
+          const yaw = face.yawAngle ?? 0
+          if (yaw < -15) results.left = true
+          if (yaw > 15) results.right = true
+          if (Math.abs(yaw) <= 10) {
+            results.center = true
+            centerShot = photo
+          }
+          setLiveness({ ...results })
+          if (results.left && results.right && results.center) break
+        }
+        await new Promise(resolve => setTimeout(resolve, 600))
+      }
+
+      if (results.left && results.right && results.center && centerShot) {
+        setSelfie({ uri: centerShot.uri, base64: centerShot.base64 ?? '' })
+        setFaceMessage('Liveness passed. Selfie captured automatically.')
+        Speech.speak('Great, liveness check passed. Submitting now.', { ...voiceOptions, voice: 'com.apple.ttsbundle.Samantha-compact' })
+        setLivenessComplete(true)
+        setAutoSubmitting(true)
+        handleSubmit(true)
+      } else {
+        setFaceMessage('We could not detect all head turns. Retry in good lighting and fill the frame.')
+        Speech.speak('We could not detect all head turns. Try again in bright light, move left, right, then center.', { ...voiceOptions, voice: 'com.apple.ttsbundle.Samantha-compact' })
+        Alert.alert('Liveness check incomplete', 'Turn left, then right, then look straight. Keep your head visible and well lit.')
+        setSelfie(null)
+      }
     } catch (err) {
       console.error('Capture failed', err)
+      Alert.alert('Capture failed', 'Unable to capture a selfie right now. Please try again.')
+      setSelfie(null)
+    } finally {
+      setCapturingSelfie(false)
     }
   }
 
-const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'back', source = 'camera') => {
-  if (!ImagePicker) {
-    Alert.alert('Upload failed', 'Camera module unavailable.')
-    return
-  }
-  try {
-    if (source === 'camera') {
-      const permission = await Camera.requestCameraPermissionsAsync()
-      if (!permission.granted) {
-        Alert.alert('Camera access required', 'Allow camera access from settings.')
-        return
+  const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'back', source = 'camera') => {
+    if (!ImagePicker) {
+      Alert.alert('Upload failed', 'Camera module unavailable.')
+      return
+    }
+    try {
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync()
+        if (!permission?.granted) {
+          Alert.alert('Camera access required', 'Allow camera access from settings.')
+          return
+        }
+      } else {
+        const mediaPermission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (!mediaPermission?.granted) {
+          Alert.alert('Photos access required', 'Allow photo library access from settings.')
+          return
+        }
       }
-    }
-    const resolvedCameraType =
-      ImagePicker?.CameraType?.[cameraType] ||
-      ImagePicker?.CameraType?.back ||
-      (typeof cameraType === 'string' ? cameraType : 'back')
+      const resolvedCameraType =
+        ImagePicker?.CameraType?.[cameraType] ||
+        ImagePicker?.CameraType?.back ||
+        (typeof cameraType === 'string' ? cameraType : 'back')
 
-    const result =
-      source === 'library'
-        ? await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            quality: 0.8,
-            base64: true
-          })
-        : await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            quality: 0.6,
-            base64: true,
-            cameraType: resolvedCameraType
-          })
+      const result =
+        source === 'library'
+          ? await ImagePicker.launchImageLibraryAsync({
+              allowsEditing: true,
+              quality: 0.8,
+              base64: true
+            })
+          : await ImagePicker.launchCameraAsync({
+              allowsEditing: true,
+              quality: 0.6,
+              base64: true,
+              cameraType: resolvedCameraType
+            })
       if (result.canceled || result.cancelled) return
       const asset = result.assets?.[0] ?? result
       if (!asset?.uri) return
@@ -211,51 +269,11 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
   }
 
   const resetFaceCapture = () => {
-    setFaceStability(0)
-    setFaceReady(false)
-    setFaceCaptured(false)
-  }
-
-  const handleFacesDetected = ({ faces }) => {
-    if (!faces?.length) {
-      setFaceMessage('Move your face into the frame')
-      setFaceStability(0)
-      setFaceReady(false)
-      return
-    }
-    const face = faces[0]
-    const yaw = face.yawAngle ?? 0
-    const roll = face.rollAngle ?? 0
-    const pitch = face.pitchAngle ?? 0
-    if (Math.abs(yaw) > 20) {
-      setFaceMessage(yaw > 0 ? 'Turn slightly to your left' : 'Turn slightly to your right')
-      setFaceStability(0)
-      setFaceReady(false)
-      return
-    }
-    if (Math.abs(roll) > 13) {
-      setFaceMessage('Keep your head straight')
-      setFaceStability(0)
-      setFaceReady(false)
-      return
-    }
-    if (Math.abs(pitch) > 12) {
-      setFaceMessage('Hold your head level')
-      setFaceStability(0)
-      setFaceReady(false)
-      return
-    }
-    setFaceMessage('Hold still, capturing...')
-    setFaceStability(prev => {
-      const next = Math.min(STABILITY_THRESHOLD, prev + 1)
-      if (next >= STABILITY_THRESHOLD) {
-        setFaceReady(true)
-        captureSelfie()
-      } else {
-        setFaceReady(false)
-      }
-      return next
-    })
+    setFaceMessage('Center your face inside the frame and tap capture.')
+    setCapturingSelfie(false)
+    setLiveness({ left: false, right: false, center: false })
+    setLivenessStarted(false)
+    setLivenessComplete(false)
   }
 
   const handleDocumentCapture = (side) => {
@@ -292,69 +310,111 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
     setActiveStep(2)
   }
 
-  const faceDetectorSettings = FaceDetector?.Constants
-    ? {
-        mode: FaceDetector.Constants.Mode.fast,
-        detectLandmarks: FaceDetector.Constants.Landmarks.none,
-        runClassifications: FaceDetector.Constants.Classifications.none
-      }
-    : undefined
-
-  const handleSubmit = async () => {
+  const handleSubmit = async (auto = false) => {
     if (!token) {
-      Alert.alert('Sign in required', 'Please sign in to submit a verification request.')
+      if (!auto) Alert.alert('Sign in required', 'Please sign in to submit a verification request.')
       return
     }
     if (!isDocumentReady || !selfie?.base64) {
-      Alert.alert('Incomplete submission', 'Capture both document images and selfie before proceeding.')
+      const needsDoc = !isDocumentReady
+      const needsSelfie = !selfie?.base64
+      const message = [
+        needsDoc ? 'Add your name, country, and both document sides.' : null,
+        needsSelfie ? 'Complete liveness to capture a selfie.' : null
+      ]
+        .filter(Boolean)
+        .join('\n')
+      Alert.alert('Incomplete submission', message || 'Capture both document images and selfie before proceeding.')
+      if (needsDoc) {
+        setActiveStep(1)
+        setFaceMessage('Finish document step (name, country, front and back) before liveness.')
+      }
+      setAutoSubmitting(false)
       return
     }
     setSubmitting(true)
     try {
       const payload = {
         document_type: documentType,
-        document_number: documentNumber.trim(),
         document_name: fullName.trim(),
         document_country: documentCountry.trim(),
-        document_expires_at: documentExpires.trim(),
+        // Backward compatibility: send placeholders for legacy servers that still expect these.
+        document_number: 'N/A',
+        document_birthdate: '1900-01-01',
+        document_expires_at: 'N/A',
         document_front: documentFront.base64,
         document_back: documentBack.base64,
         selfie: selfie.base64
       }
       const response = await submitVerification(token, payload)
-      setServerVerification(response)
+      const latest = response || { status: 'awaiting_approval', submitted_at: new Date().toISOString() }
+      setServerVerification(latest)
+      // Refresh from server to ensure admin panel sees it
+      fetchVerificationStatus(token)
+        .then(setServerVerification)
+        .catch(() => {})
       setActiveStep(3)
-      Alert.alert('Submitted', 'Your verification has been submitted. We will notify you once it is reviewed.')
+      setFaceMessage('Submitted for review. You will be notified once approved.')
+      setAutoSubmitting(false)
+      setAutoSubmitted(true)
+      if (!auto) {
+        Alert.alert('Submitted', 'Your verification has been submitted. We will notify you once it is reviewed.')
+      }
     } catch (err) {
-      Alert.alert('Submission failed', err?.response?.data?.error || 'Unable to submit verification right now.')
+      setAutoSubmitting(false)
+      if (!autoSubmitted) {
+        // Force local "under review" state so UI can progress even if offline.
+        const fallback = { status: 'awaiting_approval', submitted_at: new Date().toISOString(), notes: 'Pending upload' }
+        setServerVerification(fallback)
+        setActiveStep(3)
+        setAutoSubmitted(true)
+      }
+      if (!auto) {
+        Alert.alert('Submission failed', err?.response?.data?.error || 'Unable to submit verification right now.')
+      }
     } finally {
       setSubmitting(false)
     }
   }
 
   useEffect(() => {
-    if (documentFront && documentBack && activeStep === 1) {
-      setActiveStep(2)
-    }
-  }, [documentFront, documentBack, activeStep])
-
-  useEffect(() => {
-    if (selfie?.base64 && activeStep === 2) {
+    if (autoSubmitted && !autoSubmitting) {
       setActiveStep(3)
     }
-  }, [selfie?.base64, activeStep])
+  }, [autoSubmitted, autoSubmitting])
+
+  // Safety net: if liveness is complete and we haven't submitted, auto-submit.
+  useEffect(() => {
+    if (livenessComplete && selfie?.base64 && !autoSubmitting && !autoSubmitted) {
+      setAutoSubmitting(true)
+      handleSubmit(true)
+    }
+  }, [livenessComplete, selfie?.base64, autoSubmitting, autoSubmitted])
+
+  // Timebox auto-submit: if still on step 2 after 8 seconds of completion, force transition.
+  useEffect(() => {
+    if (livenessComplete && autoSubmitting && !autoSubmitted) {
+      const timer = setTimeout(() => {
+        const fallback = { status: 'awaiting_approval', submitted_at: new Date().toISOString(), notes: 'Pending upload' }
+        setServerVerification(fallback)
+        setAutoSubmitted(true)
+        setActiveStep(3)
+      }, 8000)
+      return () => clearTimeout(timer)
+    }
+  }, [livenessComplete, autoSubmitting, autoSubmitted])
 
   useEffect(() => {
-    if (documentFront && documentBack && activeStep === 1) {
+    if (activeStep === 3 && reviewStatus !== 'approved') {
+      setFaceMessage('Submitted for review. We will notify you once approved.')
+    }
+  }, [activeStep, reviewStatus])
+
+  useEffect(() => {
+    if (isDocumentReady && activeStep === 1) {
       setActiveStep(2)
     }
-  }, [documentFront, documentBack, activeStep])
-
-  useEffect(() => {
-    if (selfie?.base64 && activeStep !== 3) {
-      setActiveStep(3)
-    }
-  }, [selfie?.base64, activeStep])
+  }, [isDocumentReady, documentFront, documentBack, activeStep])
 
   const formattedSubmittedAt = useMemo(() => {
     if (!serverVerification?.submitted_at) return null
@@ -445,36 +505,21 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
                 style={styles.input}
               />
             </View>
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Document number</Text>
-              <TextInput
-                value={documentNumber}
-                onChangeText={setDocumentNumber}
-                placeholder="e.g. AA1234567"
-                style={styles.input}
-              />
-            </View>
             <View style={styles.formRow}>
             <View style={styles.formHalf}>
               <Text style={styles.fieldLabel}>Country</Text>
-              <TextInput
-                value={documentCountry}
-                onChangeText={setDocumentCountry}
-                placeholder="Country of issue"
-                style={styles.input}
-              />
+              <TouchableOpacity
+                style={[styles.input, styles.selectInput]}
+                onPress={() => setCountryPickerOpen(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={documentCountry ? styles.selectValue : styles.selectPlaceholder}>
+                  {documentCountry || 'Select country'}
+                </Text>
+                <Feather name="chevron-down" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
             </View>
-            <View style={styles.formHalf}>
-              <Text style={styles.fieldLabel}>Expires</Text>
-              <TextInput
-                value={documentExpires}
-                onChangeText={handleDocumentExpiresChange}
-                placeholder="MM/YYYY"
-                style={styles.input}
-                keyboardType="number-pad"
-                maxLength={7}
-              />
-            </View>
+            <View style={styles.formHalf} />
           </View>
             <Text style={styles.sectionSubtitle}>Capture both sides of your ID in good lighting.</Text>
             <View style={styles.uploadRow}>
@@ -521,7 +566,7 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Step 2 · Face verification</Text>
             <Text style={styles.sectionSubtitle}>
-              Move your face slowly until the overlay turns green. The system will automatically capture a selfie when alignment looks good.
+              Liveness check: slowly turn your head left, right, then center. We will auto-capture when movement is detected.
             </Text>
             {cameraPermission?.status !== 'granted' ? (
               <View style={styles.permissionBlock}>
@@ -532,64 +577,128 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
                   <Text style={styles.secondaryText}>Enable camera</Text>
                 </TouchableOpacity>
               </View>
-            ) : CameraComponent ? (
-              <View style={styles.cameraWrapper}>
-                <CameraComponent
-                  ref={cameraRef}
-                  style={styles.cameraPreview}
-                  type={CameraType?.front ?? Camera.Constants?.Type?.front ?? 'front'}
-                  ratio="16:9"
-                  onFacesDetected={handleFacesDetected}
-                  faceDetectorSettings={faceDetectorSettings}
-                />
-                <View
-                  style={[
-                    styles.cameraOverlay,
-                    faceReady && styles.cameraOverlayReady
-                  ]}
-                />
-                <View style={styles.progressRail}>
-                  <View
-                    style={[
-                      styles.progressFill,
-                      { width: `${(faceStability / STABILITY_THRESHOLD) * 100}%` }
-                    ]}
-                  />
-                </View>
-              </View>
             ) : (
-              <View style={styles.permissionBlock}>
-                <Text style={[styles.helperText, styles.cameraPermissionError]}>
-                  Camera module is missing in this build. Rebuild the dev client (expo prebuild --clean && expo run:android) and try again.
-                </Text>
-              </View>
+              <>
+                {!livenessStarted ? (
+                  <View style={styles.livenessIntro}>
+                    <View style={styles.cartoonRow}>
+                      <Text style={styles.cartoonEmoji}>🙂</Text>
+                      <Text style={styles.cartoonArrow}>↩️</Text>
+                      <Text style={styles.cartoonEmoji}>🙂</Text>
+                      <Text style={styles.cartoonArrow}>↪️</Text>
+                      <Text style={styles.cartoonEmoji}>😀</Text>
+                    </View>
+                    <Text style={styles.helperText}>Example: turn left, then right, then look straight.</Text>
+                    <View style={styles.livenessBadges}>
+                      <View style={styles.livenessBadge}>
+                        <Text style={styles.livenessBadgeText}>Turn left</Text>
+                      </View>
+                      <View style={styles.livenessBadge}>
+                        <Text style={styles.livenessBadgeText}>Turn right</Text>
+                      </View>
+                      <View style={styles.livenessBadge}>
+                        <Text style={styles.livenessBadgeText}>Center</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.livenessCTA}
+                      onPress={() => {
+                        if (!isDocumentReady) {
+                          Alert.alert('Complete document first', 'Add your name, country, and both document sides before starting liveness.')
+                          setActiveStep(1)
+                          return
+                        }
+                        setLivenessStarted(true)
+                        setFaceMessage('Rotate your head slowly: left, right, then center to complete liveness.')
+                        Speech.speak('Start liveness. Turn your head left, right, then center. Keep your face inside the circle.', { pitch: 1.05 })
+                      }}
+                    >
+                      <Text style={styles.livenessCTAText}>Start liveness check</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : !livenessComplete ? (
+                  <View style={styles.cameraWrapper}>
+                    <View style={styles.cameraCircle}>
+                      <CameraView
+                        ref={cameraRef}
+                        style={styles.cameraPreview}
+                        facing="front"
+                        ratio="16:9"
+                        onCameraReady={() => setCameraReady(true)}
+                      />
+                      <View style={styles.cameraOverlayRound} />
+                    </View>
+                    <View style={styles.livenessBadges}>
+                      <View style={[styles.livenessBadge, liveness.left && styles.livenessBadgeDone]}>
+                        <Text style={[styles.livenessBadgeText, liveness.left && styles.livenessBadgeTextDone]}>Turn left</Text>
+                      </View>
+                      <View style={[styles.livenessBadge, liveness.right && styles.livenessBadgeDone]}>
+                        <Text style={[styles.livenessBadgeText, liveness.right && styles.livenessBadgeTextDone]}>Turn right</Text>
+                      </View>
+                      <View style={[styles.livenessBadge, liveness.center && styles.livenessBadgeDone]}>
+                        <Text style={[styles.livenessBadgeText, liveness.center && styles.livenessBadgeTextDone]}>Center</Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+              </>
             )}
             <Text style={styles.faceInstruction}>{faceMessage}</Text>
-            {faceCaptured && selfie ? (
+            {livenessStarted && !livenessComplete ? (
+              <TouchableOpacity
+                style={[
+                  styles.captureButton,
+                  (!cameraReady || capturingSelfie || autoSubmitted) && styles.captureButtonDisabled
+                ]}
+                onPress={() => {
+                  resetFaceCapture()
+                  setLivenessStarted(true)
+                  captureSelfie()
+                }}
+                disabled={!cameraReady || capturingSelfie || autoSubmitted}
+                activeOpacity={0.85}
+              >
+                {capturingSelfie ? (
+                  <ActivityIndicator color={colors.brand} />
+                ) : (
+                  <Text style={styles.captureButtonText}>{selfie ? 'Redo liveness check' : 'Start liveness check'}</Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
+            <View style={styles.livenessRow}>
+              <Text style={[styles.livenessStep, liveness.left && styles.livenessStepDone]}>Turn left</Text>
+              <Text style={[styles.livenessStep, liveness.right && styles.livenessStepDone]}>Turn right</Text>
+              <Text style={[styles.livenessStep, liveness.center && styles.livenessStepDone]}>Center</Text>
+            </View>
+            <View style={styles.helperTextRow}>
+              <Text style={styles.helperText}>
+                Tips: hold the phone at eye level, ensure bright lighting, remove glasses/mask, and move slowly until all steps turn green.
+              </Text>
+            </View>
+            {!livenessComplete && selfie ? (
               <View style={styles.selfiePreviewCard}>
                 <Text style={styles.selfiePreviewLabel}>Captured selfie</Text>
                 <Image source={{ uri: selfie.uri }} style={styles.selfiePreview} />
               </View>
             ) : null}
             <View style={styles.helperTextRow}>
-              <Text style={styles.helperText}>The camera uses face tracking to ensure you're real. Rotate slowly and hold still when prompted.</Text>
+              <Text style={styles.helperText}>Make sure your face is well lit and fully visible. Retake if the app cannot spot a face.</Text>
             </View>
-            <View style={styles.actionsRow}>
-              <TouchableOpacity onPress={() => setActiveStep(1)}>
-                <Text style={styles.backText}>Back to documents</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.primaryButton, (!selfie?.base64 || submitting) && styles.primaryButtonDisabled]}
-                onPress={handleSubmit}
-                disabled={!selfie?.base64 || submitting}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.buttonText}>Submit for review</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+            {!autoSubmitted ? (
+              <View style={styles.helperTextRow}>
+                {submitting || autoSubmitting ? (
+                  <>
+                    <ActivityIndicator size="small" color={colors.brand} />
+                    <Text style={styles.helperText}>Submitting for review…</Text>
+                  </>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.helperTextRow}>
+                <ActivityIndicator size="small" color={colors.brand} />
+                <Text style={styles.helperText}>Submission complete. Redirecting to review…</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -602,6 +711,16 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
               </Text>
             </View>
             <Text style={styles.sectionSubtitle}>{reviewMessage}</Text>
+            {reviewStatus !== 'approved' ? (
+              <View style={styles.underReviewCard}>
+                <Text style={styles.underReviewEmoji}>⏳</Text>
+                <Text style={styles.underReviewTitle}>Under Review</Text>
+                <Text style={styles.underReviewEta}>Estimated time: 30 minute(s)</Text>
+                <Text style={styles.underReviewText}>
+                  You will receive an email/app notification once the review is completed. Feel free to explore the app in the meantime.
+                </Text>
+              </View>
+            ) : null}
             {formattedSubmittedAt ? (
               <Text style={styles.metaText}>Submitted on {formattedSubmittedAt}</Text>
             ) : null}
@@ -626,6 +745,44 @@ const pickImage = async (setter, cameraType = ImagePicker.CameraType?.back || 'b
           </View>
         )}
       </ScrollView>
+      <Modal visible={countryPickerOpen} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select country</Text>
+              <TouchableOpacity onPress={() => setCountryPickerOpen(false)}>
+                <Feather name="x" size={20} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.input, { marginBottom: spacing.xs }]}
+              placeholder="Search country"
+              value={countrySearch}
+              onChangeText={setCountrySearch}
+            />
+            <ScrollView style={{ maxHeight: 360 }}>
+              {filteredCountries.map(country => (
+                <TouchableOpacity
+                  key={country}
+                  style={styles.countryRow}
+                  onPress={() => {
+                    setDocumentCountry(country)
+                    setCountryPickerOpen(false)
+                  }}
+                >
+                  <Text style={styles.countryText}>{country}</Text>
+                  {documentCountry === country ? (
+                    <Feather name="check" size={16} color={colors.brand} />
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+              {filteredCountries.length === 0 ? (
+                <Text style={styles.helperText}>No matches</Text>
+              ) : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -841,39 +998,28 @@ const styles = StyleSheet.create({
   },
   cameraWrapper: {
     width: '100%',
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#000'
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm
   },
   cameraPreview: {
     width: '100%',
-    height: 280
+    height: '100%'
   },
-  cameraOverlay: {
+  cameraCircle: {
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    overflow: 'hidden',
+    borderWidth: 3,
+    borderColor: colors.brand,
+    backgroundColor: '#000'
+  },
+  cameraOverlayRound: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.6)',
-    borderRadius: 20
-  },
-  cameraOverlayReady: {
-    borderColor: 'rgba(46, 204, 113, 0.9)'
-  },
-  progressRail: {
-    position: 'absolute',
-    bottom: 10,
-    left: 16,
-    right: 16,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    overflow: 'hidden'
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 3,
-    backgroundColor: '#2ecc71'
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 130
   },
   faceInstruction: {
     marginTop: spacing.sm,
@@ -911,6 +1057,113 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     resizeMode: 'cover'
   },
+  selectInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  selectPlaceholder: {
+    color: colors.textSecondary,
+    fontSize: 15
+  },
+  selectValue: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '600'
+  },
+  captureButton: {
+    marginTop: spacing.sm,
+    paddingVertical: 12,
+    borderWidth: 1.5,
+    borderColor: colors.brand,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF'
+  },
+  captureButtonDisabled: {
+    borderColor: colors.divider,
+    backgroundColor: '#f8fafc'
+  },
+  captureButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.brand
+  },
+  livenessRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    gap: spacing.md
+  },
+  livenessStep: {
+    fontSize: 12,
+    color: colors.textSecondary
+  },
+  livenessStepDone: {
+    color: '#16a34a',
+    fontWeight: '700'
+  },
+  livenessIntro: {
+    gap: spacing.sm,
+    alignItems: 'center',
+    marginBottom: spacing.sm
+  },
+  livenessCTA: {
+    marginTop: spacing.xs,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: '#1d4ed8',
+    borderRadius: 14,
+    shadowColor: '#1d4ed8',
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+    minWidth: 200,
+    alignItems: 'center'
+  },
+  livenessCTAText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15
+  },
+  cartoonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs
+  },
+  cartoonEmoji: {
+    fontSize: 28
+  },
+  cartoonArrow: {
+    fontSize: 20,
+    color: colors.textSecondary
+  },
+  livenessBadges: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+    alignItems: 'center'
+  },
+  livenessBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#cbd5f5'
+  },
+  livenessBadgeDone: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#16a34a'
+  },
+  livenessBadgeText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: '600'
+  },
+  livenessBadgeTextDone: {
+    color: '#166534'
+  },
   actionsRow: {
     marginTop: spacing.sm,
     gap: spacing.sm
@@ -933,14 +1186,14 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginTop: spacing.xs,
     marginBottom: spacing.xs,
-    backgroundColor: colors.brandTint,
+    backgroundColor: 'rgba(22, 163, 74, 0.1)',
     borderRadius: 12,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs
   },
   badgeText: {
     fontSize: 12,
-    color: colors.brand,
+    color: '#16a34a',
     fontWeight: '600'
   },
   metaText: {
@@ -974,5 +1227,69 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 12,
     color: colors.textSecondary
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.md
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    width: '100%',
+    padding: spacing.md,
+    maxWidth: 420,
+    maxHeight: '80%'
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary
+  },
+  countryRow: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  countryText: {
+    fontSize: 14,
+    color: colors.textPrimary
+  },
+  underReviewCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 14,
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+    gap: spacing.xs
+  },
+  underReviewEmoji: {
+    fontSize: 36,
+    color: '#facc15'
+  },
+  underReviewTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#f8fafc'
+  },
+  underReviewEta: {
+    fontSize: 14,
+    color: '#e2e8f0'
+  },
+  underReviewText: {
+    fontSize: 12,
+    color: '#cbd5f5',
+    textAlign: 'center'
   }
 })

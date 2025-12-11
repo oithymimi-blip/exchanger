@@ -76,6 +76,14 @@ const selectVerificationsForAdmin = db.prepare(`
     v.id,
     v.user_id,
     v.document_type,
+    v.document_number,
+    v.document_name,
+    v.document_country,
+    v.document_birthdate,
+    v.document_expires_at,
+    v.document_front,
+    v.document_back,
+    v.selfie,
     v.status,
     v.notes,
     v.face_similarity,
@@ -97,6 +105,19 @@ const updateVerificationStatusStmt = db.prepare(`
   SET status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
   WHERE user_id = ?
 `);
+const updateVerificationFieldsStmt = db.prepare(`
+  UPDATE verifications
+  SET
+    document_name = COALESCE(?, document_name),
+    document_number = COALESCE(?, document_number),
+    document_country = COALESCE(?, document_country),
+    document_birthdate = COALESCE(?, document_birthdate),
+    document_expires_at = COALESCE(?, document_expires_at),
+    notes = COALESCE(?, notes),
+    updated_at = CURRENT_TIMESTAMP
+  WHERE user_id = ?
+`);
+const deleteVerificationStmt = db.prepare('DELETE FROM verifications WHERE user_id = ?');
 const ALLOWED_VERIFICATION_STATUSES = new Set(['pending', 'awaiting_approval', 'approved', 'rejected']);
 
 const listSubadminsStmt = db.prepare(`
@@ -350,6 +371,50 @@ router.patch('/verifications/:userId', requireAdminRole('users'), (req, res) => 
     userId
   );
   res.json({ ok: true, status: normalizedStatus });
+});
+
+router.put('/verifications/:userId', requireAdminRole('users'), (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+  const target = db.prepare('SELECT * FROM verifications WHERE user_id = ?').get(userId);
+  if (!target) {
+    return res.status(404).json({ error: 'Verification not found' });
+  }
+  const {
+    document_name,
+    document_number,
+    document_country,
+    document_birthdate,
+    document_expires_at,
+    notes
+  } = req.body || {};
+
+  updateVerificationFieldsStmt.run(
+    typeof document_name === 'string' ? document_name.trim() || null : null,
+    typeof document_number === 'string' ? document_number.trim() || null : null,
+    typeof document_country === 'string' ? document_country.trim() || null : null,
+    typeof document_birthdate === 'string' ? document_birthdate.trim() || null : null,
+    typeof document_expires_at === 'string' ? document_expires_at.trim() || null : null,
+    typeof notes === 'string' ? (notes.trim() || null) : null,
+    userId
+  );
+  const updated = db.prepare('SELECT * FROM verifications WHERE user_id = ?').get(userId);
+  res.json(updated);
+});
+
+router.delete('/verifications/:userId', requireAdminRole('users'), (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+  const target = db.prepare('SELECT user_id FROM verifications WHERE user_id = ?').get(userId);
+  if (!target) {
+    return res.status(404).json({ error: 'Verification not found' });
+  }
+  deleteVerificationStmt.run(userId);
+  res.json({ ok: true });
 });
 
 router.delete('/users/:id', requireAdminRole('users'), (req, res) => {

@@ -11,6 +11,7 @@ const selectVerificationStmt = db.prepare(`
     document_number,
     document_name,
     document_country,
+    document_birthdate,
     document_expires_at,
     status,
     notes,
@@ -28,13 +29,14 @@ const selectVerificationStmt = db.prepare(`
 `);
 
 const upsertVerificationStmt = db.prepare(`
-  INSERT INTO verifications (user_id, document_type, document_number, document_name, document_country, document_expires_at, document_front, document_back, selfie, status, notes, submitted_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_approval', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  INSERT INTO verifications (user_id, document_type, document_number, document_name, document_country, document_birthdate, document_expires_at, document_front, document_back, selfie, status, notes, submitted_at, updated_at)
+  VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, 'awaiting_approval', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   ON CONFLICT(user_id) DO UPDATE SET
     document_type = excluded.document_type,
     document_number = excluded.document_number,
     document_name = excluded.document_name,
     document_country = excluded.document_country,
+    document_birthdate = excluded.document_birthdate,
     document_expires_at = excluded.document_expires_at,
     document_front = excluded.document_front,
     document_back = excluded.document_back,
@@ -56,6 +58,7 @@ function formatVerification(row) {
     document_number: row.document_number,
     document_name: row.document_name,
     document_country: row.document_country,
+    document_birthdate: row.document_birthdate,
     document_expires_at: row.document_expires_at,
     status: row.status || 'pending',
     notes: row.notes,
@@ -103,10 +106,8 @@ router.post('/verifications', requireAuth, (req, res) => {
   try {
     const {
       document_type,
-      document_number,
       document_name,
       document_country,
-      document_expires_at,
       document_front,
       document_back,
       selfie,
@@ -118,11 +119,6 @@ router.post('/verifications', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Document type is required' });
     }
 
-    const trimmedNumber = (document_number || '').trim();
-    if (!trimmedNumber) {
-      return res.status(400).json({ error: 'Document number is required' });
-    }
-
     const trimmedName = (document_name || '').trim();
     if (!trimmedName) {
       return res.status(400).json({ error: 'Full name is required' });
@@ -131,11 +127,6 @@ router.post('/verifications', requireAuth, (req, res) => {
     const trimmedCountry = (document_country || '').trim();
     if (!trimmedCountry) {
       return res.status(400).json({ error: 'Document issuing country is required' });
-    }
-
-    const trimmedExpires = (document_expires_at || '').trim();
-    if (!trimmedExpires) {
-      return res.status(400).json({ error: 'Document expiration date is required' });
     }
 
     if (typeof document_front !== 'string' || !document_front.trim()) {
@@ -151,10 +142,11 @@ router.post('/verifications', requireAuth, (req, res) => {
     upsertVerificationStmt.run(
       req.user.id,
       normalizedType,
-      trimmedNumber,
+      null,
       trimmedName,
       trimmedCountry,
-      trimmedExpires,
+      null,
+      null,
       document_front.trim(),
       document_back.trim(),
       selfie.trim(),

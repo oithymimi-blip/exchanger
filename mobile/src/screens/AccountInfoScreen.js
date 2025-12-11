@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { Modal, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -23,9 +23,10 @@ const VERIFICATION_STATUS_LABELS = {
 }
 
 export function AccountInfoScreen({ navigation }) {
-  const { user, token } = useAuth()
+  const { user, token, logout } = useAuth()
   const [verificationStatus, setVerificationStatus] = useState('not_started')
   const [loadingStatus, setLoadingStatus] = useState(true)
+  const [showAccountActions, setShowAccountActions] = useState(false)
 
   useEffect(() => {
     let canceled = false
@@ -65,6 +66,23 @@ export function AccountInfoScreen({ navigation }) {
     ...action,
     status: action.key === 'verifications' ? verificationLabel : action.status
   }))
+  const statusStyle =
+    verificationStatus === 'approved'
+      ? styles.actionStatusApproved
+      : verificationStatus === 'rejected'
+        ? styles.actionStatusRejected
+        : styles.actionStatus
+
+  const closeActionSheet = () => setShowAccountActions(false)
+  const handleLogout = () => {
+    closeActionSheet()
+    setTimeout(() => logout(), 120)
+  }
+  const handleSwitchAccount = () => {
+    closeActionSheet()
+    setTimeout(() => logout(), 120)
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
@@ -73,7 +91,7 @@ export function AccountInfoScreen({ navigation }) {
           <Feather name="arrow-left" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Account Info</Text>
-        <TouchableOpacity style={styles.iconButton} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconButton} activeOpacity={0.7} onPress={() => setShowAccountActions(true)}>
           <Feather name="user" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
       </View>
@@ -138,12 +156,51 @@ export function AccountInfoScreen({ navigation }) {
             </View>
             <View style={styles.actionText}>
               <Text style={styles.actionLabel}>{action.label}</Text>
-              {action.status ? <Text style={styles.actionStatus}>{action.status}</Text> : null}
+              {action.status ? <Text style={statusStyle}>{action.status}</Text> : null}
             </View>
             <Feather name="chevron-right" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
         ))}
       </ScrollView>
+
+      <Modal
+        visible={showAccountActions}
+        transparent
+        animationType="fade"
+        onRequestClose={closeActionSheet}
+      >
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity style={styles.sheetBackdropTouchable} activeOpacity={1} onPress={closeActionSheet} />
+          <View style={styles.sheetContainer}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Account actions</Text>
+              <Text style={styles.sheetSubtitle}>Quickly switch or sign out</Text>
+            </View>
+
+            <TouchableOpacity style={styles.sheetLogoutButton} activeOpacity={0.88} onPress={handleLogout}>
+              <View style={styles.sheetLogoutLeft}>
+                <Feather name="log-out" size={18} color={colors.danger} />
+                <View>
+                  <Text style={styles.sheetLogoutText}>Log Out</Text>
+                  <Text style={styles.sheetLogoutHint}>End your current session</Text>
+                </View>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.danger} />
+            </TouchableOpacity>
+
+            <View style={styles.sheetCard}>
+              <TouchableOpacity style={styles.sheetAction} activeOpacity={0.85} onPress={handleSwitchAccount}>
+                <View style={styles.sheetActionLeft}>
+                  <Feather name="repeat" size={18} color={colors.textPrimary} />
+                  <Text style={styles.sheetActionLabel}>Switch Account</Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -306,5 +363,106 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     marginTop: 2
+  },
+  actionStatusApproved: {
+    fontSize: 12,
+    color: '#16a34a',
+    fontWeight: '700',
+    marginTop: 2
+  },
+  actionStatusRejected: {
+    fontSize: 12,
+    color: colors.danger,
+    fontWeight: '700',
+    marginTop: 2
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: '#00000055',
+    justifyContent: 'flex-end'
+  },
+  sheetBackdropTouchable: {
+    ...StyleSheet.absoluteFillObject
+  },
+  sheetContainer: {
+    backgroundColor: '#F8FAFB',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg + 12,
+    marginBottom: spacing.md
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#D5DBE7',
+    marginBottom: spacing.md
+  },
+  sheetHeader: {
+    gap: 2,
+    marginBottom: spacing.md
+  },
+  sheetTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary
+  },
+  sheetSubtitle: {
+    fontSize: 13,
+    color: colors.textSecondary
+  },
+  sheetCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: '#E8EDF3'
+  },
+  sheetAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm
+  },
+  sheetActionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm
+  },
+  sheetActionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary
+  },
+  sheetLogoutButton: {
+    backgroundColor: '#FDF2F2',
+    borderRadius: 16,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderWidth: 1,
+    borderColor: '#FDE8E8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm
+  },
+  sheetLogoutLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm
+  },
+  sheetLogoutText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.danger
+  },
+  sheetLogoutHint: {
+    fontSize: 12,
+    color: '#ef4444',
+    fontWeight: '600'
   }
 })
